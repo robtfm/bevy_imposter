@@ -3,27 +3,7 @@
     view_transformations::position_view_to_world,
 }
 
-const IMPOSTER_FLAG_HEMISPHERICAL: u32 = 1;
-
-struct ImposterData {
-    center_and_scale: vec4<f32>,
-    grid_size: u32,
-    flags: u32,
-}
-
-@group(2) @binding(200)
-var<uniform> imposter_data: ImposterData;
-@group(2) @binding(201) 
-var imposter_texture: texture_2d<f32>;
-@group(2) @binding(202) 
-var imposter_sampler: sampler;
-
-struct ImposterVertexOut {
-    @builtin(position) position: vec4<f32>,
-    @location(0) world_position: vec3<f32>,
-    @location(1) camera_direction: vec3<f32>,
-    @location(2) base_world_position: vec3<f32>,
-}
+#import "shaders/shared.wgsl"::{imposter_data, ImposterVertexOut, IMPOSTER_FLAG_HEMISPHERICAL, imposter_texture, imposter_sampler}
 
 fn dir_to_grid(dir: vec3<f32>) -> vec2<f32> {
 	if ((imposter_data.flags & IMPOSTER_FLAG_HEMISPHERICAL) != 0) {
@@ -48,27 +28,40 @@ fn dir_to_grid(dir: vec3<f32>) -> vec2<f32> {
 	}
 }
 
-fn normal_from_uv(uv: vec2<f32>) -> vec3<f32> {
+struct Basis {
+    normal: vec3<f32>,
+    up: vec3<f32>,
+}
+
+fn normal_from_uv(uv: vec2<f32>) -> Basis {
+    var n: vec3<f32>;
 	if ((imposter_data.flags & IMPOSTER_FLAG_HEMISPHERICAL) != 0) {
         let x = uv.x - uv.y;
         let z = -1.0 + uv.x + uv.y;
         let y = 1.0 - abs(x) - abs(z);
-        return vec3(x, y, z);
+        n = vec3(x, y, z);
     } else {
         let x = uv.x * 2.0 - 1.0;
         let z = uv.y * 2.0 - 1.0;
         let y = 1.0 - abs(x) - abs(z);
 
         if (y < 0.0) {
-            return vec3(
+            n = vec3(
                 sign(x) * (1.0 - abs(z)),
                 y,
                 sign(z) * (1.0 - abs(x)),
             );
         } else {
-            return vec3(x, y, z);
+            n = vec3(x, y, z);
         }
     }
+    n = normalize(n);
+    let up = select(vec3<f32>(0.0, 1.0, 0.0), vec3<f32>(0.0, 0.0, 1.0), abs(n.y) > 0.5);
+
+    var basis: Basis;
+    basis.normal = n;
+    basis.up = up;
+    return basis;
 }
 
 fn grid_weights(coords: vec2<f32>) -> vec4<f32> {
@@ -88,14 +81,14 @@ fn sample_tile(base_world_position: vec3<f32>, world_position: vec3<f32>, grid_i
     let grid_count = f32(imposter_data.grid_size);
     let tile_origin = grid_index / grid_count;
     let tile_size = 1.0 / grid_count;
-    let sample_normal = normalize(normal_from_uv(tile_origin * grid_count / (grid_count - 1.0)));
+    let basis = normal_from_uv(tile_origin * grid_count / (grid_count - 1.0));
+    let sample_normal = basis.normal;
     let camera_world_position = position_view_to_world(vec3<f32>(0.0));
     let cam_to_fragment = normalize(world_position - camera_world_position);
     let distance = dot(world_position - camera_world_position, sample_normal) / dot(cam_to_fragment, sample_normal);
     let intersect = distance * cam_to_fragment + camera_world_position;
     // calculate uv using basis of the sample plane
-    var up = select(vec3<f32>(0.0, 1.0, 0.0), vec3<f32>(0.0, 0.0, 1.0), abs(sample_normal.y) > 0.5);
-    let sample_r = normalize(cross(sample_normal, up)) / (imposter_data.center_and_scale.w * 2.0);
+    let sample_r = normalize(cross(sample_normal, basis.up)) / (imposter_data.center_and_scale.w * 2.0);
     let sample_u = normalize(cross(sample_r, sample_normal)) / (imposter_data.center_and_scale.w * 2.0);
     let v = intersect - base_world_position;
     let x = dot(v, sample_r);

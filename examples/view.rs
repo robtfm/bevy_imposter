@@ -218,9 +218,9 @@ pub fn impost(
         info!("requesting imposter");
         req.send(ImpostGltf {
             gltf: scene_handle.gltf_handle.clone(),
-            grid_size: 12,
-            image_size: UVec2::splat(512),
-            mode: ImposterMode::Spherical,
+            grid_size: 6,
+            image_size: UVec2::splat(256),
+            mode: ImposterMode::Hemispherical,
         });
     }
 }
