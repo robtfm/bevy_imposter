@@ -69,7 +69,7 @@ fn pack_rgba_roughness_metallic(albedo: vec4<f32>, roughness: f32, metallic: f32
         pack_bits(albedo.b, 10u, 5u) +
         pack_bits(albedo.a, 15u, 1u) +
         pack_bits(roughness, 16u, 8u) +
-        pack_bits(metallic, 16u, 8u);
+        pack_bits(metallic, 24u, 8u);
 }
 
 fn pack_pbrinput(input: PbrInput) -> vec2<u32> {
