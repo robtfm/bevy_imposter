@@ -5,7 +5,8 @@
     mesh_view_bindings::view,
 }
 
-#import "shaders/shared.wgsl"::{imposter_data, ImposterVertexOut}
+#import "shaders/shared.wgsl"::ImposterVertexOut;
+#import "shaders/bindings.wgsl"::imposter_data;
 
 @vertex
 fn vertex(vertex: Vertex) -> ImposterVertexOut {

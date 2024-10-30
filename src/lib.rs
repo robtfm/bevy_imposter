@@ -1,13 +1,12 @@
 pub mod material;
 pub mod oct_coords;
 pub mod util;
+pub mod node;
 
 use std::collections::VecDeque;
 
 use bevy::{
-    asset::LoadState,
-    prelude::*,
-    render::{
+    asset::LoadState, pbr::ExtendedMaterial, prelude::*, render::{
         camera::{CameraOutputMode, RenderTarget, ScalingMode, Viewport},
         primitives::{Aabb, Sphere},
         render_asset::RenderAssetUsages,
@@ -15,17 +14,16 @@ use bevy::{
             BlendComponent, BlendFactor, BlendOperation, BlendState, Extent3d, TextureDescriptor,
             TextureDimension, TextureFormat, TextureUsages,
         },
-        texture::{ImageAddressMode, ImageFilterMode, ImageSampler, ImageSamplerDescriptor},
+        texture::{BevyDefault, ImageAddressMode, ImageFilterMode, ImageSampler, ImageSamplerDescriptor},
         view::{Layer, RenderLayers, VisibilitySystems},
-    },
-    scene::InstanceId,
+    }, scene::InstanceId
 };
-use material::{Imposter, ImposterData};
+use material::{Imposter, ImposterData, ImposterMode, StandardMaterialImposterMaker};
 use oct_coords::normal_from_uv;
 use util::FireEventEx;
 
 #[derive(Clone, Copy)]
-pub enum ImposterMode {
+pub enum GridMode {
     Spherical,
     Hemispherical,
 }
@@ -35,7 +33,8 @@ pub struct ImpostGltf {
     pub gltf: Handle<Gltf>,
     pub grid_size: u32,
     pub image_size: UVec2,
-    pub mode: ImposterMode,
+    pub grid_mode: GridMode,
+    pub imposter_mode: ImposterMode,
 }
 
 #[derive(Event)]
@@ -48,7 +47,10 @@ pub const IMPOSTER_LAYER: Layer = 7;
 impl Plugin for GltfImposterPlugin {
     fn build(&self, app: &mut App) {
         app.add_event::<ImpostGltf>()
-            .add_plugins(MaterialPlugin::<Imposter>::default())
+            .add_plugins((
+                MaterialPlugin::<Imposter>::default(),
+                MaterialPlugin::<ExtendedMaterial<StandardMaterial, StandardMaterialImposterMaker>>::default(),
+            ))
             .add_event::<ImpostGltfResult>()
             .add_systems(Startup, setup)
             .add_systems(
@@ -107,6 +109,7 @@ pub fn snap_gltfs(
     aabbs: Query<(&GlobalTransform, &Aabb)>,
     material_handles: Query<&Handle<StandardMaterial>>,
     materials: Res<Assets<StandardMaterial>>,
+    mut replacement_materials: ResMut<Assets<ExtendedMaterial<StandardMaterial, StandardMaterialImposterMaker>>>,
     mut cam: Query<(&mut Camera, &mut Transform)>,
     asset_server: Res<AssetServer>,
 ) {
@@ -188,6 +191,13 @@ pub fn snap_gltfs(
                             .flatten()
                             .map(|h| h.clone().untyped()),
                         );
+
+                        if ev.imposter_mode == ImposterMode::Material {
+                            commands.entity(entity).remove::<Handle<StandardMaterial>>().insert(replacement_materials.add(ExtendedMaterial {
+                                base: mat.clone(),
+                                extension: StandardMaterialImposterMaker {},
+                            }));
+                        }
                     }
                 }
 
@@ -214,12 +224,18 @@ pub fn snap_gltfs(
                     height: image_size.y,
                     depth_or_array_layers: 1,
                 };
+
+                let image_format = match ev.imposter_mode {
+                    ImposterMode::Image => TextureFormat::Bgra8UnormSrgb,
+                    ImposterMode::Material => TextureFormat::Rg32Uint,
+                };
+
                 let mut image = Image {
                     texture_descriptor: TextureDescriptor {
                         label: None,
                         size,
                         dimension: TextureDimension::D2,
-                        format: TextureFormat::Bgra8UnormSrgb,
+                        format: image_format,
                         mip_level_count: 1,
                         sample_count: 1,
                         usage: TextureUsages::TEXTURE_BINDING
@@ -241,7 +257,7 @@ pub fn snap_gltfs(
                 image.resize(size);
                 let image = images.add(image);
 
-                let (n, up) = normal_from_uv(Vec2::ZERO, ev.mode);
+                let (n, up) = normal_from_uv(Vec2::ZERO, ev.grid_mode);
 
                 let camera = commands
                     .spawn((
@@ -253,21 +269,7 @@ pub fn snap_gltfs(
                                     ..Default::default()
                                 }),
                                 target: RenderTarget::Image(image.clone()),
-                                output_mode: CameraOutputMode::Write {
-                                    blend_state: Some(BlendState {
-                                        color: BlendComponent {
-                                            src_factor: BlendFactor::One,
-                                            dst_factor: BlendFactor::One,
-                                            operation: BlendOperation::Add,
-                                        },
-                                        alpha: BlendComponent {
-                                            src_factor: BlendFactor::One,
-                                            dst_factor: BlendFactor::One,
-                                            operation: BlendOperation::Add,
-                                        },
-                                    }),
-                                    clear_color: ClearColorConfig::None,
-                                },
+                                output_mode: CameraOutputMode::Skip,
                                 clear_color: ClearColorConfig::None,
                                 ..Default::default()
                             },
@@ -346,11 +348,12 @@ pub fn snap_gltfs(
                         data: ImposterData {
                             center_and_scale: Vec3::from(sphere.center).extend(sphere.radius),
                             grid_size: ev.grid_size,
-                            flags: match ev.mode {
-                                ImposterMode::Spherical => 0,
-                                ImposterMode::Hemispherical => 1,
+                            flags: match ev.grid_mode {
+                                GridMode::Spherical => 0,
+                                GridMode::Hemispherical => 1,
                             },
                         },
+                        mode: ev.imposter_mode,
                     };
                     commands.entity(settings.root).despawn_descendants();
                     commands.fire_event(ImpostGltfResult(ev, Ok(imposter)));
@@ -372,7 +375,7 @@ pub fn snap_gltfs(
                 });
                 let uv = UVec2::new(x, y).as_vec2() / (ev.grid_size - 1) as f32;
                 println!("rect: {:?}", cam.viewport);
-                let (n, up) = normal_from_uv(uv, ev.mode);
+                let (n, up) = normal_from_uv(uv, ev.grid_mode);
                 *transform =
                     Transform::from_translation(Vec3::from(sphere.center) + n * sphere.radius)
                         .looking_at(sphere.center.into(), up);
@@ -380,8 +383,26 @@ pub fn snap_gltfs(
                     "translation: {:?}, from uv {:?}, normal/up {:?}",
                     transform.translation,
                     uv,
-                    normal_from_uv(uv, ev.mode)
+                    normal_from_uv(uv, ev.grid_mode)
                 );
+
+                if next_frame == ev.grid_size * ev.grid_size - 1 {
+                    cam.output_mode = CameraOutputMode::Write {
+                        blend_state: Some(BlendState {
+                            color: BlendComponent {
+                                src_factor: BlendFactor::One,
+                                dst_factor: BlendFactor::One,
+                                operation: BlendOperation::Add,
+                            },
+                            alpha: BlendComponent {
+                                src_factor: BlendFactor::One,
+                                dst_factor: BlendFactor::One,
+                                operation: BlendOperation::Add,
+                            },
+                        }),
+                        clear_color: ClearColorConfig::None,
+                    };
+                }
 
                 ImposterState::Rendering {
                     camera,

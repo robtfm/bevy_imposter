@@ -5,7 +5,7 @@ use bevy::{
     render::{primitives::{Aabb, Sphere}, view::RenderLayers},
     scene::InstanceId,
 };
-use bevy_imposter::{material::Imposter, GltfImposterPlugin, ImpostGltf, ImpostGltfResult, ImposterMode, IMPOSTER_LAYER};
+use bevy_imposter::{material::{Imposter, ImposterMode}, GltfImposterPlugin, GridMode, ImpostGltf, ImpostGltfResult, IMPOSTER_LAYER};
 use camera_controller::{CameraController, CameraControllerPlugin};
 
 #[path = "helpers/camera_controller.rs"]
@@ -218,9 +218,10 @@ pub fn impost(
         info!("requesting imposter");
         req.send(ImpostGltf {
             gltf: scene_handle.gltf_handle.clone(),
-            grid_size: 6,
-            image_size: UVec2::splat(256),
-            mode: ImposterMode::Hemispherical,
+            grid_size: 16,
+            image_size: UVec2::splat(1024),
+            grid_mode: GridMode::Spherical,
+            imposter_mode: ImposterMode::Image,
         });
     }
 }
