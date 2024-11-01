@@ -6,6 +6,7 @@
 };
 
 const GRID_HEMISPHERICAL: u32 = 1;
+const VERTEX_BILLBOARD: u32 = 2;
 
 struct ImposterData {
     center_and_scale: vec4<f32>,

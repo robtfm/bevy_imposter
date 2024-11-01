@@ -370,7 +370,7 @@ fn impost(
                             data: ImposterData {
                                 center_and_scale: Vec3::ZERO.extend(scene_handle.sphere.radius),
                                 grid_size: settings.grid_size,
-                                flags: if settings.mode == GridMode::Hemispherical {
+                                flags: 2 + if settings.mode == GridMode::Hemispherical {
                                     1
                                 } else {
                                     0

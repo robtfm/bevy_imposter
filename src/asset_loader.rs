@@ -11,6 +11,7 @@ use bevy::{
     prelude::Image,
     render::render_asset::RenderAssetUsages,
 };
+use serde::{Deserialize, Serialize};
 use wgpu::{Extent3d, TextureFormat};
 
 use crate::{
@@ -20,17 +21,26 @@ use crate::{
 
 pub struct ImposterLoader;
 
+#[derive(Serialize, Deserialize, Default)]
+pub enum ImposterVertexMode {
+    // should be used with a Rectangle mesh
+    #[default]
+    Billboard,
+    // can be used with any mesh
+    NoBillboard,
+}
+
 impl AssetLoader for ImposterLoader {
     type Asset = Imposter;
 
-    type Settings = ();
+    type Settings = ImposterVertexMode;
 
     type Error = anyhow::Error;
 
     fn load<'a>(
         &'a self,
         reader: &'a mut bevy::asset::io::Reader,
-        _: &'a Self::Settings,
+        load_settings: &'a Self::Settings,
         load_context: &'a mut bevy::asset::LoadContext,
     ) -> impl bevy::utils::ConditionalSendFuture<Output = Result<Self::Asset, Self::Error>> {
         Box::pin(async move {
@@ -75,7 +85,10 @@ impl AssetLoader for ImposterLoader {
 
             let image = load_context.add_labeled_asset("texture".to_owned(), image);
 
-            let flags = match mode {
+            let flags = match load_settings {
+                ImposterVertexMode::Billboard => 2,
+                ImposterVertexMode::NoBillboard => 0,
+            } + match mode {
                 "spherical" => 0,
                 "hemispherical" => 1,
                 _ => anyhow::bail!("bad mode `{}`", mode),
