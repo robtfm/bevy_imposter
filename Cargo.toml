@@ -6,3 +6,10 @@ edition = "2021"
 [dependencies]
 #bevy = "0.14.2"
 bevy = { path = "../bevy" }
+wgpu = "0.20"
+crossbeam-channel = "0.5.13"
+rand = "0.8.5"
+async-channel = "2.2.0"
+zip = "2"
+anyhow = "*"
+pico-args = "0.5.0"

@@ -1,5 +1,8 @@
-use bevy::{pbr::MaterialExtension, prelude::*, render::render_resource::{AsBindGroup, ShaderRef, ShaderType}};
-
+use bevy::{
+    pbr::MaterialExtension,
+    prelude::*,
+    render::render_resource::{AsBindGroup, ShaderRef, ShaderType},
+};
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum ImposterMode {
@@ -48,7 +51,7 @@ impl Material for Imposter {
         // AlphaMode::Mask(1.0)
         AlphaMode::Blend
     }
-    
+
     fn specialize(
         _: &bevy::pbr::MaterialPipeline<Self>,
         descriptor: &mut bevy::render::render_resource::RenderPipelineDescriptor,
@@ -56,8 +59,18 @@ impl Material for Imposter {
         key: bevy::pbr::MaterialPipelineKey<Self>,
     ) -> Result<(), bevy::render::render_resource::SpecializedMeshPipelineError> {
         match key.bind_group_data.0 {
-            ImposterMode::Image => descriptor.fragment.as_mut().unwrap().shader_defs.push("IMPOSTER_IMAGE".into()),
-            ImposterMode::Material => descriptor.fragment.as_mut().unwrap().shader_defs.push("IMPOSTER_MATERIAL".into()),
+            ImposterMode::Image => descriptor
+                .fragment
+                .as_mut()
+                .unwrap()
+                .shader_defs
+                .push("IMPOSTER_IMAGE".into()),
+            ImposterMode::Material => descriptor
+                .fragment
+                .as_mut()
+                .unwrap()
+                .shader_defs
+                .push("IMPOSTER_MATERIAL".into()),
         }
         Ok(())
     }

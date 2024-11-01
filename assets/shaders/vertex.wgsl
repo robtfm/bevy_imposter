@@ -21,8 +21,16 @@ fn vertex(vertex: Vertex) -> ImposterVertexOut {
     let camera_world_position = position_view_to_world(vec3<f32>(0.0));
 
     let back = normalize(camera_world_position - imposter_world_position);
+    let inv_rot = transpose(mat3x3<f32>(
+        model[0].xyz,
+        model[1].xyz,
+        model[2].xyz
+    ));
+    out.inverse_rotation_0c = inv_rot[0];
+    out.inverse_rotation_1c = inv_rot[1];
+    out.inverse_rotation_2c = inv_rot[2];
     // not actually world normal, actually camera direction
-    out.camera_direction = normalize(mesh_functions::mesh_position_local_to_world(model, vec4<f32>(back, 0.0))).xyz;
+    out.camera_direction = normalize(back * inv_rot);
 
     let up = vec3<f32>(0.0, 1.0, 0.0);
     let right = normalize(cross(up, back));

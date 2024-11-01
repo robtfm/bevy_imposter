@@ -20,6 +20,9 @@ struct ImposterVertexOut {
     @location(0) world_position: vec3<f32>,
     @location(1) camera_direction: vec3<f32>,
     @location(2) base_world_position: vec3<f32>,
+    @location(3) inverse_rotation_0c: vec3<f32>,
+    @location(4) inverse_rotation_1c: vec3<f32>,
+    @location(5) inverse_rotation_2c: vec3<f32>,
 }
 
 fn spherical_uv_from_normal(dir: vec3<f32>) -> vec2<f32> {
@@ -45,8 +48,8 @@ fn spherical_normal_from_uv(uv: vec2<f32>) -> vec3<f32> {
 
 
 // rg32uint
-// r: [0-5] r, [6-10] g, [11-15] b, [16] a, [17-24] roughness, [25-32] metallic
-// g: [0-24] normal, [25-32] flags (unlit etc)
+// r: [0-4] r, [5-9] g, [10-14] b, [15] a, [16-23] roughness, [24-31] metallic
+// g: [0-23] normal, [24-31] flags (unlit etc)
 
 // pack
 fn pack_bits(input: f32, offset: u32, count: u32) -> u32 {

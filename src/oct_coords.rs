@@ -24,14 +24,11 @@ pub fn normal_from_uv(uv: Vec2, mode: GridMode) -> (Vec3, Vec3) {
             let y = 1.0 - x.abs() - z.abs();
             (x, y, z)
         }
-    }.into();
+    }
+    .into();
     let n = n.normalize();
 
-    let up = if n.y.abs() > 0.99 {
-        Vec3::Z
-    } else {
-        Vec3::Y
-    };
+    let up = if n.y.abs() > 0.99 { Vec3::Z } else { Vec3::Y };
 
     (n, up)
 }

@@ -1,12 +1,16 @@
 pub mod material;
+pub mod bake;
 pub mod oct_coords;
 pub mod util;
-pub mod node;
+pub mod asset_loader;
 
 use std::collections::VecDeque;
 
 use bevy::{
-    asset::LoadState, pbr::ExtendedMaterial, prelude::*, render::{
+    asset::LoadState,
+    pbr::ExtendedMaterial,
+    prelude::*,
+    render::{
         camera::{CameraOutputMode, RenderTarget, ScalingMode, Viewport},
         primitives::{Aabb, Sphere},
         render_asset::RenderAssetUsages,
@@ -14,15 +18,16 @@ use bevy::{
             BlendComponent, BlendFactor, BlendOperation, BlendState, Extent3d, TextureDescriptor,
             TextureDimension, TextureFormat, TextureUsages,
         },
-        texture::{BevyDefault, ImageAddressMode, ImageFilterMode, ImageSampler, ImageSamplerDescriptor},
+        texture::{ImageAddressMode, ImageFilterMode, ImageSampler, ImageSamplerDescriptor},
         view::{Layer, RenderLayers, VisibilitySystems},
-    }, scene::InstanceId
+    },
+    scene::InstanceId,
 };
 use material::{Imposter, ImposterData, ImposterMode, StandardMaterialImposterMaker};
 use oct_coords::normal_from_uv;
 use util::FireEventEx;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub enum GridMode {
     Spherical,
     Hemispherical,
@@ -47,10 +52,14 @@ pub const IMPOSTER_LAYER: Layer = 7;
 impl Plugin for GltfImposterPlugin {
     fn build(&self, app: &mut App) {
         app.add_event::<ImpostGltf>()
-            .add_plugins((
-                MaterialPlugin::<Imposter>::default(),
-                MaterialPlugin::<ExtendedMaterial<StandardMaterial, StandardMaterialImposterMaker>>::default(),
-            ))
+            .add_plugins(
+                (
+                    MaterialPlugin::<Imposter>::default(),
+                    MaterialPlugin::<
+                        ExtendedMaterial<StandardMaterial, StandardMaterialImposterMaker>,
+                    >::default(),
+                ),
+            )
             .add_event::<ImpostGltfResult>()
             .add_systems(Startup, setup)
             .add_systems(
@@ -109,7 +118,9 @@ pub fn snap_gltfs(
     aabbs: Query<(&GlobalTransform, &Aabb)>,
     material_handles: Query<&Handle<StandardMaterial>>,
     materials: Res<Assets<StandardMaterial>>,
-    mut replacement_materials: ResMut<Assets<ExtendedMaterial<StandardMaterial, StandardMaterialImposterMaker>>>,
+    mut replacement_materials: ResMut<
+        Assets<ExtendedMaterial<StandardMaterial, StandardMaterialImposterMaker>>,
+    >,
     mut cam: Query<(&mut Camera, &mut Transform)>,
     asset_server: Res<AssetServer>,
 ) {
@@ -193,10 +204,13 @@ pub fn snap_gltfs(
                         );
 
                         if ev.imposter_mode == ImposterMode::Material {
-                            commands.entity(entity).remove::<Handle<StandardMaterial>>().insert(replacement_materials.add(ExtendedMaterial {
-                                base: mat.clone(),
-                                extension: StandardMaterialImposterMaker {},
-                            }));
+                            commands
+                                .entity(entity)
+                                .remove::<Handle<StandardMaterial>>()
+                                .insert(replacement_materials.add(ExtendedMaterial {
+                                    base: mat.clone(),
+                                    extension: StandardMaterialImposterMaker {},
+                                }));
                         }
                     }
                 }

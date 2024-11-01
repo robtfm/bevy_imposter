@@ -12,7 +12,7 @@
 fn fragment(
     in: VertexOutput,
     @builtin(front_facing) is_front: bool,
-) -> @location(6) vec2<u32> {
+) -> @location(0) vec2<u32> {
     // generate a PbrInput struct from the StandardMaterial bindings
     var pbr_input = pbr_input_from_standard_material(in, is_front);
 

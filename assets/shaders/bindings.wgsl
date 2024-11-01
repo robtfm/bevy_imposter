@@ -36,7 +36,7 @@ struct Basis {
     up: vec3<f32>,
 }
 
-fn oct_mode_normal_from_uv(uv: vec2<f32>) -> Basis {
+fn oct_mode_normal_from_uv(uv: vec2<f32>, inv_rot: mat3x3<f32>) -> Basis {
     var n: vec3<f32>;
 	if ((imposter_data.flags & GRID_HEMISPHERICAL) != 0) {
         var x = uv.x - uv.y;
@@ -50,8 +50,8 @@ fn oct_mode_normal_from_uv(uv: vec2<f32>) -> Basis {
     var up = select(vec3<f32>(0.0, 1.0, 0.0), vec3<f32>(0.0, 0.0, 1.0), abs(n.y) > 0.99);
 
     var basis: Basis;
-    basis.normal = n;
-    basis.up = up;
+    basis.normal = inv_rot * n;
+    basis.up = inv_rot * up;
     return basis;
 }
 
@@ -68,11 +68,11 @@ fn grid_weights(coords: vec2<f32>) -> vec4<f32> {
     return res / (res.x + res.y + res.z + res.w);
 }
 
-fn sample_uvs(base_world_position: vec3<f32>, world_position: vec3<f32>, grid_index: vec2<f32>) -> vec2<f32> {
+fn sample_uvs(base_world_position: vec3<f32>, world_position: vec3<f32>, inv_rot: mat3x3<f32>, grid_index: vec2<f32>) -> vec2<f32> {
     var grid_count = f32(imposter_data.grid_size);
     var tile_origin = grid_index / grid_count;
     var tile_size = 1.0 / grid_count;
-    var basis = oct_mode_normal_from_uv(tile_origin * grid_count / (grid_count - 1.0));
+    var basis = oct_mode_normal_from_uv(tile_origin * grid_count / (grid_count - 1.0), inv_rot);
     var sample_normal = basis.normal;
     var camera_world_position = position_view_to_world(vec3<f32>(0.0));
     var cam_to_fragment = normalize(world_position - camera_world_position);
@@ -93,14 +93,14 @@ fn sample_uvs(base_world_position: vec3<f32>, world_position: vec3<f32>, grid_in
     );
 }
 
-fn sample_tile(base_world_position: vec3<f32>, world_position: vec3<f32>, grid_index: vec2<f32>) -> vec4<f32> {
-    var uv = sample_uvs(base_world_position, world_position, grid_index);
+fn sample_tile(base_world_position: vec3<f32>, world_position: vec3<f32>, inv_rot: mat3x3<f32>, grid_index: vec2<f32>) -> vec4<f32> {
+    var uv = sample_uvs(base_world_position, world_position, inv_rot, grid_index);
     var sample_tl = textureSample(imposter_texture, imposter_sampler, uv);
     return select(sample_tl, vec4(0.0), uv.x < 0.0);
 }
 
-fn sample_tile_material(base_world_position: vec3<f32>, world_position: vec3<f32>, grid_index: vec2<f32>) -> vec2<u32> {
-    var uv = sample_uvs(base_world_position, world_position, grid_index);
+fn sample_tile_material(base_world_position: vec3<f32>, world_position: vec3<f32>, inv_rot: mat3x3<f32>, grid_index: vec2<f32>) -> vec2<u32> {
+    var uv = sample_uvs(base_world_position, world_position, inv_rot, grid_index);
     var coords = vec2<u32>(uv * vec2<f32>(textureDimensions(imposter_texture)));
     var pixel = textureLoad(imposter_texture, coords, 0);
     return select(pixel.xy, vec2(0u), uv.x < 0.0);

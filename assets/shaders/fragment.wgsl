@@ -18,6 +18,12 @@ fn fragment(in: ImposterVertexOut) -> FragmentOutput {
 
     let weights = grid_weights(frac);
 
+    let inv_rot = mat3x3(
+        in.inverse_rotation_0c,
+        in.inverse_rotation_1c,
+        in.inverse_rotation_2c,
+    );
+
 #ifdef IMPOSTER_IMAGE
     let sample_tl = sample_tile(in.base_world_position, in.world_position, grid_index);
     let corner_offset = select(vec2(1.0, 0.0), vec2(0.0, 1.0), weights.y > 0.0);
@@ -33,10 +39,10 @@ fn fragment(in: ImposterVertexOut) -> FragmentOutput {
 #endif
 
 #ifdef IMPOSTER_MATERIAL
-    let sample_tl = sample_tile_material(in.base_world_position, in.world_position, grid_index);
+    let sample_tl = sample_tile_material(in.base_world_position, in.world_position, inv_rot, grid_index);
     let corner_offset = select(vec2(1.0, 0.0), vec2(0.0, 1.0), weights.z > 0.0);
-    let sample_corner = sample_tile_material(in.base_world_position, in.world_position, grid_index + corner_offset);
-    let sample_br = sample_tile_material(in.base_world_position, in.world_position, grid_index + vec2(1.0, 1.0));
+    let sample_corner = sample_tile_material(in.base_world_position, in.world_position, inv_rot, grid_index + corner_offset);
+    let sample_br = sample_tile_material(in.base_world_position, in.world_position, inv_rot, grid_index + vec2(1.0, 1.0));
 
     var pbr_input = unpack_pbrinput(sample_tl, in.position);
 
@@ -75,7 +81,7 @@ fn fragment(in: ImposterVertexOut) -> FragmentOutput {
     pbr_input.material.perceptual_roughness = total_rough_metallic.x / total_weight;
     pbr_input.material.metallic = total_rough_metallic.y / total_weight;
     
-    pbr_input.N = normalize(total_normal / total_weight);
+    pbr_input.N = inv_rot * normalize(total_normal / total_weight);
     pbr_input.world_normal = pbr_input.N;
 
     if (pbr_input.material.flags & STANDARD_MATERIAL_FLAGS_UNLIT_BIT) == 0u {

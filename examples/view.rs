@@ -2,10 +2,16 @@ use bevy::{
     asset::LoadState,
     math::Vec3A,
     prelude::*,
-    render::{primitives::{Aabb, Sphere}, view::RenderLayers},
+    render::{
+        primitives::{Aabb, Sphere},
+        view::RenderLayers,
+    },
     scene::InstanceId,
 };
-use bevy_imposter::{material::{Imposter, ImposterMode}, GltfImposterPlugin, GridMode, ImpostGltf, ImpostGltfResult, IMPOSTER_LAYER};
+use bevy_imposter::{
+    material::{Imposter, ImposterMode},
+    GltfImposterPlugin, GridMode, ImpostGltf, ImpostGltfResult, IMPOSTER_LAYER,
+};
 use camera_controller::{CameraController, CameraControllerPlugin};
 
 #[path = "helpers/camera_controller.rs"]
@@ -13,12 +19,16 @@ mod camera_controller;
 
 fn main() {
     App::new()
-        .add_plugins((DefaultPlugins.set(WindowPlugin {
-            primary_window: Some(Window { present_mode: bevy::window::PresentMode::Immediate, ..Default::default() }),
-            ..Default::default()
-        }), 
-            CameraControllerPlugin, 
-            GltfImposterPlugin
+        .add_plugins((
+            DefaultPlugins.set(WindowPlugin {
+                primary_window: Some(Window {
+                    present_mode: bevy::window::PresentMode::Immediate,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+            CameraControllerPlugin,
+            GltfImposterPlugin,
         ))
         .add_systems(Startup, setup)
         .add_systems(PreUpdate, setup_scene_after_load)
@@ -200,7 +210,7 @@ fn setup_scene_after_load(
                     transform: Transform::from_xyz(1.0, 1.0, 0.0).looking_at(Vec3::ZERO, Vec3::Y),
                     ..default()
                 },
-                RenderLayers::from_layers(&[0, IMPOSTER_LAYER])
+                RenderLayers::from_layers(&[0, IMPOSTER_LAYER]),
             ));
 
             scene_handle.has_light = true;
@@ -254,10 +264,10 @@ fn update(
                     material: imposters.add(imposter.clone()),
                     ..Default::default()
                 });
-            },
+            }
             Err(e) => {
                 error!("{e}");
-            },
+            }
         }
     }
 }
