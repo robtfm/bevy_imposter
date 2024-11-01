@@ -1,5 +1,8 @@
 use core::str;
-use std::io::{Cursor, Read};
+use std::{
+    io::{Cursor, Read, Write},
+    path::PathBuf,
+};
 
 use anyhow::anyhow;
 use bevy::{
@@ -10,7 +13,10 @@ use bevy::{
 };
 use wgpu::{Extent3d, TextureFormat};
 
-use crate::render::{Imposter, ImposterData};
+use crate::{
+    render::{Imposter, ImposterData},
+    GridMode,
+};
 
 pub struct ImposterLoader;
 
@@ -90,4 +96,28 @@ impl AssetLoader for ImposterLoader {
     fn extensions(&self) -> &[&str] {
         &["boimp"]
     }
+}
+
+pub fn write_asset(
+    path: &PathBuf,
+    scale: f32,
+    grid_size: u32,
+    mode: GridMode,
+    image: Image,
+) -> Result<(), anyhow::Error> {
+    let file = std::fs::File::create(path)?;
+    let mut zip = zip::ZipWriter::new(file);
+    let options = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Zstd)
+        .compression_level(Some(-10));
+    zip.start_file("texture.raw", options)?;
+    zip.write_all(&image.data)?;
+    zip.start_file("settings.txt", options)?;
+    let mode = match mode {
+        GridMode::Spherical => "spherical",
+        GridMode::Hemispherical => "hemispherical",
+    };
+    zip.write_all(format!("{grid_size} {scale} {mode}").as_bytes())?;
+    zip.finish()?;
+    Ok(())
 }

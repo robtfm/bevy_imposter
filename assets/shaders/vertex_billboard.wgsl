@@ -1,12 +1,11 @@
 #import bevy_pbr::{
     mesh_functions,
-    forward_io::{Vertex, VertexOutput},
-    view_transformations::{position_world_to_clip, direction_view_to_world, position_view_to_world},
-    mesh_view_bindings::view,
+    forward_io::Vertex,
+    view_transformations::{position_world_to_clip, position_view_to_world},
 }
 
 #import "shaders/shared.wgsl"::ImposterVertexOut;
-#import "shaders/bindings.wgsl"::imposter_data;
+#import "shaders/bindings.wgsl"::{imposter_data, sample_uvs_unbounded, grid_weights, oct_mode_uv_from_normal};
 
 @vertex
 fn vertex(vertex: Vertex) -> ImposterVertexOut {
@@ -29,7 +28,6 @@ fn vertex(vertex: Vertex) -> ImposterVertexOut {
     out.inverse_rotation_0c = inv_rot[0];
     out.inverse_rotation_1c = inv_rot[1];
     out.inverse_rotation_2c = inv_rot[2];
-    // not actually world normal, actually camera direction
     out.camera_direction = normalize(back * inv_rot);
 
     let up = vec3<f32>(0.0, 1.0, 0.0);
@@ -45,8 +43,19 @@ fn vertex(vertex: Vertex) -> ImposterVertexOut {
     out.base_world_position = imposter_world_position;
     out.world_position = imposter_world_position.xyz + (vertex.position * scale * 2.0) * view_matrix;
     out.position = position_world_to_clip(out.world_position);
-    // out.uv = vertex.uv;
-    // out.instance_index = vertex.instance_index;
+
+    let grid_count = f32(imposter_data.grid_size);
+    var grid_pos = oct_mode_uv_from_normal(out.camera_direction) * (grid_count - 1);
+    let grid_index = clamp(floor(grid_pos), vec2(0.0), vec2(grid_count - 2.0));
+    let frac = clamp(grid_pos - grid_index, vec2(0.0), vec2(1.0));
+    let weights = grid_weights(frac);
+    let uv_tl = sample_uvs_unbounded(imposter_world_position, out.world_position, inv_rot, grid_index);
+    let corner_offset = select(vec2(1.0, 0.0), vec2(0.0, 1.0), weights.z > 0.0);
+    let uv_corner = sample_uvs_unbounded(imposter_world_position, out.world_position, inv_rot, grid_index + corner_offset);
+    let uv_br = sample_uvs_unbounded(imposter_world_position, out.world_position, inv_rot, grid_index + vec2(1.0, 1.0));
+
+    out.uv_tl_c = vec4(uv_tl, uv_corner);
+    out.uv_br = uv_br;
 
     return out;
 }

@@ -51,7 +51,10 @@ fn main() {
         .add_plugins((FrameTimeDiagnosticsPlugin, LogDiagnosticsPlugin::default()))
         .add_systems(Startup, setup)
         .add_systems(PreUpdate, setup_scene_after_load)
-        .add_systems(Update, (scene_load_check, impost, update_lights, rotate))
+        .add_systems(
+            Update,
+            (scene_load_check, impost, update_lights, rotate, swap_old),
+        )
         .run();
 }
 
@@ -322,36 +325,38 @@ fn impost(
         camera.init_target(&mut images);
 
         let mut rng = thread_rng();
-        let range = scene_handle.sphere.radius * 100.0;
+        let range = scene_handle.sphere.radius * (settings.count as f32).sqrt();
         let range = -range..=range;
         let offset = Vec3::X * 0.5;
         let rotate_range = 0.0..=(PI * 2.0);
         println!("spawning {} imposters", settings.count);
+        let hemi_mult = if settings.mode == GridMode::Hemispherical {
+            0.0
+        } else {
+            1.0
+        };
         for _ in 0..settings.count {
             let translation = Vec3::new(
                 rng.gen_range(range.clone()),
-                rng.gen_range(range.clone()),
+                rng.gen_range(range.clone()) * hemi_mult,
                 rng.gen_range(range.clone()),
             ) + offset;
             let rotation = Vec3::new(
-                rng.gen_range(rotate_range.clone())
-                    * if settings.mode == GridMode::Hemispherical {
-                        0.0
-                    } else {
-                        1.0
-                    },
+                rng.gen_range(rotate_range.clone()) * hemi_mult,
                 rng.gen_range(rotate_range.clone()),
-                rng.gen_range(rotate_range.clone())
-                    * if settings.mode == GridMode::Hemispherical {
-                        0.0
-                    } else {
-                        1.0
-                    },
+                rng.gen_range(rotate_range.clone()) * hemi_mult,
             );
             let spawned = commands
                 .spawn((
                     MaterialMeshBundle {
-                        mesh: meshes.add(Rectangle::default().mesh().build()),
+                        mesh: meshes.add(
+                            Plane3d {
+                                normal: Dir3::Z,
+                                half_size: Vec2::splat(0.5),
+                            }
+                            .mesh()
+                            .subdivisions(1),
+                        ),
                         transform: Transform::from_translation(
                             translation + Vec3::from(scene_handle.sphere.center),
                         )
@@ -424,5 +429,13 @@ pub struct Rotate;
 fn rotate(mut q: Query<&mut Transform, With<Rotate>>, time: Res<Time>) {
     for mut t in q.iter_mut() {
         t.rotation = Quat::from_rotation_y(time.elapsed_seconds());
+    }
+}
+
+fn swap_old(key_input: Res<ButtonInput<KeyCode>>, mut imps: ResMut<Assets<Imposter>>) {
+    if key_input.just_pressed(KeyCode::KeyP) {
+        for a in imps.iter_mut() {
+            a.1.data.flags ^= 2;
+        }
     }
 }

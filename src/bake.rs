@@ -1,10 +1,9 @@
 use std::{
     ffi::OsStr,
     hash::Hash,
-    io::Write,
     marker::PhantomData,
     ops::Range,
-    path::{Path, PathBuf},
+    path::Path,
     sync::{Arc, Mutex},
 };
 
@@ -55,7 +54,7 @@ use bevy::{
 };
 use wgpu::{BufferUsages, ImageCopyBuffer, ImageDataLayout};
 
-use crate::{oct_coords::normal_from_uv, GridMode};
+use crate::{asset_loader::write_asset, oct_coords::normal_from_uv, GridMode};
 
 pub struct ImposterBakePlugin;
 
@@ -236,30 +235,8 @@ impl ImposterBakeCamera {
         self.callback = Some(Arc::new(Mutex::new(Some(Box::new(callback)))));
     }
 
-    pub fn write_asset(
-        path: &PathBuf,
-        scale: f32,
-        grid_size: u32,
-        mode: GridMode,
-        image: Image,
-    ) -> Result<(), anyhow::Error> {
-        let file = std::fs::File::create(path)?;
-        let mut zip = zip::ZipWriter::new(file);
-        let options = zip::write::SimpleFileOptions::default()
-            .compression_method(zip::CompressionMethod::Zstd)
-            .compression_level(Some(-7));
-        zip.start_file("texture.raw", options)?;
-        zip.write_all(&image.data)?;
-        zip.start_file("settings.txt", options)?;
-        let mode = match mode {
-            GridMode::Spherical => "spherical",
-            GridMode::Hemispherical => "hemispherical",
-        };
-        zip.write_all(format!("{grid_size} {scale} {mode}").as_bytes())?;
-        zip.finish()?;
-        Ok(())
-    }
-
+    // Returns an async fn that can be set as the callback to save the asset once baked
+    // warning: uses the current camera state - changes after this call will not be reflected
     pub fn save_asset_callback(
         &mut self,
         path: impl AsRef<Path>,
@@ -273,7 +250,7 @@ impl ImposterBakeCamera {
         let radius = self.radius;
         let mode = self.grid_mode;
         move |image| {
-            if let Err(e) = Self::write_asset(&path, radius, grid_size, mode, image) {
+            if let Err(e) = write_asset(&path, radius, grid_size, mode, image) {
                 error!("error writing imposter asset: {e}");
             } else {
                 info!("imposter saved");

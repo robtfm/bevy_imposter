@@ -5,8 +5,6 @@
     mesh_view_bindings::view,
 };
 
-
-
 const GRID_HEMISPHERICAL: u32 = 1;
 
 struct ImposterData {
@@ -23,6 +21,8 @@ struct ImposterVertexOut {
     @location(3) inverse_rotation_0c: vec3<f32>,
     @location(4) inverse_rotation_1c: vec3<f32>,
     @location(5) inverse_rotation_2c: vec3<f32>,
+    @location(6) uv_tl_c: vec4<f32>,
+    @location(7) uv_br: vec2<f32>,
 }
 
 fn spherical_uv_from_normal(dir: vec3<f32>) -> vec2<f32> {
@@ -116,21 +116,36 @@ fn unpack_metallic(input: u32) -> f32 {
     return unpack_bits(input, 24u, 8u);
 }
 
-fn unpack_pbrinput(packed: vec2<u32>, frag_coord: vec4<f32>) -> PbrInput {
-    // let packed = bitcast<u32>(packed_f32);
+struct UnpackedMaterialProps {
+    rgba: vec4<f32>,
+    normal: vec3<f32>,
+    roughness: f32,
+    metallic: f32,
+    flags: u32,
+}
+
+fn unpack_props(packed: vec2<u32>) -> UnpackedMaterialProps {
+    var props: UnpackedMaterialProps;
+    props.rgba = unpack_rgba(packed.r);
+    props.roughness = unpack_roughness(packed.r);
+    props.metallic = unpack_metallic(packed.r);
+    props.normal = unpack_normal(packed.g);
+    props.flags = unpack_flags(packed.g);
+    return props;
+}
+
+fn unpack_pbrinput(props: UnpackedMaterialProps, frag_coord: vec4<f32>) -> PbrInput {
     var input = pbr_input_new();
 
-    input.material.base_color = unpack_rgba(packed.r);
-    input.material.perceptual_roughness = unpack_roughness(packed.r);
-    input.material.metallic = unpack_metallic(packed.r);
+    input.material.base_color = props.rgba;
+    input.material.perceptual_roughness = props.roughness;
+    input.material.metallic = props.metallic;
 
-
-    let flags = unpack_flags(packed.g);
-    if flags != 0u {
+    if props.flags != 0u {
         input.material.flags |= STANDARD_MATERIAL_FLAGS_UNLIT_BIT;
     }
 
-    input.N = unpack_normal(packed.g);
+    input.N = props.normal;
     input.world_normal = input.N;
     input.frag_coord = frag_coord;
     input.world_position = vec4(position_ndc_to_world(frag_coord_to_ndc(frag_coord)), 1.0);

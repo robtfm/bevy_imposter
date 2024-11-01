@@ -53,7 +53,7 @@ impl From<&Imposter> for ImposterKey {
 
 impl Material for Imposter {
     fn vertex_shader() -> ShaderRef {
-        "shaders/vertex.wgsl".into()
+        "shaders/vertex_billboard.wgsl".into()
     }
 
     fn fragment_shader() -> ShaderRef {

@@ -5,7 +5,7 @@ edition = "2021"
 
 [dependencies]
 #bevy = "0.14.2"
-bevy = { path = "../bevy" }
+bevy = { git = "https://github.com/robtfm/bevy", branch = "release-0.14-dcl-cosmic-noimage" }
 wgpu = "0.20"
 crossbeam-channel = "0.5.13"
 rand = "0.8.5"

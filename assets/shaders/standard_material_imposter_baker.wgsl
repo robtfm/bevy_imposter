@@ -1,5 +1,4 @@
 #import bevy_pbr::{
-    pbr_types::STANDARD_MATERIAL_FLAGS_UNLIT_BIT,
     pbr_functions::alpha_discard,
     pbr_fragment::pbr_input_from_standard_material,
     prepass_io::VertexOutput,
@@ -20,14 +19,6 @@ fn fragment(
     pbr_input.material.base_color = alpha_discard(pbr_input.material, pbr_input.material.base_color);
 
     // write the imposter gbuffer
-    var gbuffer = pack_pbrinput(pbr_input);
-    let reconstructed_pbr_input = unpack_pbrinput(gbuffer, in.position);
-    var color = pbr_input.material.base_color;
-    var reconstructed_color = reconstructed_pbr_input.material.base_color;
-
-    var normal = pbr_input.world_normal;
-    var reconstructed_normal = reconstructed_pbr_input.world_normal;
-
-    return gbuffer;
+    return pack_pbrinput(pbr_input);
 }
 
