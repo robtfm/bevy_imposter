@@ -1,8 +1,18 @@
 use bevy::{
-    pbr::MaterialExtension,
     prelude::*,
     render::render_resource::{AsBindGroup, ShaderRef, ShaderType},
 };
+
+use crate::asset_loader::ImposterLoader;
+
+pub struct ImposterRenderPlugin;
+
+impl Plugin for ImposterRenderPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_plugins(MaterialPlugin::<Imposter>::default())
+            .register_asset_loader(ImposterLoader);
+    }
+}
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum ImposterMode {
@@ -25,10 +35,13 @@ pub struct ImposterKey(ImposterMode);
 pub struct Imposter {
     #[uniform(200)]
     pub data: ImposterData,
+    // material mode
     #[texture(201, dimension = "2d", sample_type = "u_int")]
-    // #[texture(201, dimension = "2d")]
-    // #[sampler(202)]
-    pub image: Handle<Image>,
+    pub material: Option<Handle<Image>>,
+    // image mode
+    // #[texture(202, dimension = "2d")]
+    // #[sampler(203)]
+    // pub image: Option<Handle<Image>>
     pub mode: ImposterMode,
 }
 
@@ -48,7 +61,6 @@ impl Material for Imposter {
     }
 
     fn alpha_mode(&self) -> AlphaMode {
-        // AlphaMode::Mask(1.0)
         AlphaMode::Blend
     }
 
@@ -73,14 +85,5 @@ impl Material for Imposter {
                 .push("IMPOSTER_MATERIAL".into()),
         }
         Ok(())
-    }
-}
-
-#[derive(Asset, TypePath, AsBindGroup, Clone, Debug)]
-pub struct StandardMaterialImposterMaker {}
-
-impl MaterialExtension for StandardMaterialImposterMaker {
-    fn fragment_shader() -> ShaderRef {
-        "shaders/standard_material_imposter_baker.wgsl".into()
     }
 }

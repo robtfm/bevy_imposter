@@ -8,8 +8,9 @@ use bevy::{
     scene::InstanceId,
 };
 use bevy_imposter::{
-    material::{Imposter, ImposterData, ImposterMode},
     bake::{ImposterBakeBundle, ImposterBakeCamera, ImposterBakePlugin},
+    render::{Imposter, ImposterData, ImposterMode},
+    GridMode, ImposterRenderPlugin,
 };
 use camera_controller::{CameraController, CameraControllerPlugin};
 use rand::{thread_rng, Rng};
@@ -17,9 +18,18 @@ use rand::{thread_rng, Rng};
 #[path = "helpers/camera_controller.rs"]
 mod camera_controller;
 
+#[derive(Resource)]
+struct BakeSettings {
+    mode: GridMode,
+    grid_size: u32,
+    image_size: u32,
+    count: usize,
+}
+
 fn main() {
-    println!("specify a glb/gltf via args (or you get a flight helmet)");
-    println!("press I to start baking every frame and spawn some imposters. press O to stop baking.");
+    println!(
+        "press I to start baking every frame and spawn some imposters. press O to stop baking."
+    );
 
     App::new()
         .insert_resource(AmbientLight {
@@ -35,17 +45,13 @@ fn main() {
                 ..Default::default()
             }),
             CameraControllerPlugin,
-            // GltfImposterPlugin,
             ImposterBakePlugin,
-            MaterialPlugin::<Imposter>::default(),
+            ImposterRenderPlugin,
         ))
         .add_plugins((FrameTimeDiagnosticsPlugin, LogDiagnosticsPlugin::default()))
         .add_systems(Startup, setup)
         .add_systems(PreUpdate, setup_scene_after_load)
-        .add_systems(
-            Update,
-            (scene_load_check, impost, update_lights, rotate),
-        )
+        .add_systems(Update, (scene_load_check, impost, update_lights, rotate))
         .run();
 }
 
@@ -87,31 +93,46 @@ impl SceneHandle {
     }
 }
 
-fn setup(
-    mut commands: Commands,
-    asset_server: Res<AssetServer>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut mats: ResMut<Assets<StandardMaterial>>,
-) {
-    let scene_path = std::env::args()
-        .nth(1)
-        .unwrap_or_else(|| "models/FlightHelmet/FlightHelmet.gltf".to_string());
+fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+    let mut args = pico_args::Arguments::from_env();
+    let grid_size = args.value_from_str("--grid").unwrap_or(8);
+    let image_size = args.value_from_str("--image").unwrap_or(1024);
+    let mode = match args
+        .value_from_str("--mode")
+        .unwrap_or("h".to_owned())
+        .chars()
+        .next()
+        .unwrap()
+    {
+        'h' => GridMode::Hemispherical,
+        's' => GridMode::Spherical,
+        _ => {
+            warn!("unrecognized mode, use [h]emispherical or [s]pherical. defaulting to Hemispherical");
+            GridMode::Hemispherical
+        }
+    };
+    let count = args.value_from_str("--count").unwrap_or(1000);
+    let scene_path = args
+        .value_from_str("--source")
+        .unwrap_or_else(|_| "models/FlightHelmet/FlightHelmet.gltf".to_string());
+
+    let unused = args.finish();
+    if !unused.is_empty() {
+        println!("unrecognized arguments: {unused:?}");
+        println!("args: \n--mode [h]emispherical or [s]pherical\n--grid n (grid size, default 8)\n--image n (image size, default 1024)\n--count n (number of imposters to spawn)\n--source path (asset to load, default flight helmet)");
+        std::process::exit(1);
+    }
+
+    info!("settings: grid: {grid_size}, image: {image_size}, mode: {mode:?}");
     info!("Loading {}", scene_path);
     let (file_path, scene_index) = parse_scene(scene_path);
 
     commands.insert_resource(SceneHandle::new(asset_server.load(file_path), scene_index));
-
-    commands.spawn(PbrBundle {
-        transform: Transform::from_xyz(2.0, 0.0, 0.0).with_scale(Vec3::splat(0.1)),
-        mesh: meshes.add(Cuboid::default().mesh()),
-        material: mats.add(Color::BLACK),
-        ..Default::default()
-    });
-    commands.spawn(PbrBundle {
-        transform: Transform::from_xyz(2.0, 0.0, 1.0).with_scale(Vec3::splat(0.1)),
-        mesh: meshes.add(Cuboid::default().mesh()),
-        material: mats.add(Color::srgba(0.0, 0.0, 1.0, 1.0)),
-        ..Default::default()
+    commands.insert_resource(BakeSettings {
+        mode,
+        grid_size,
+        image_size,
+        count,
     });
 }
 
@@ -271,7 +292,7 @@ fn setup_scene_after_load(
     }
 }
 
-pub fn impost(
+fn impost(
     mut commands: Commands,
     k: Res<ButtonInput<KeyCode>>,
     scene_handle: Res<SceneHandle>,
@@ -279,6 +300,7 @@ pub fn impost(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<Imposter>>,
     cams: Query<Entity, With<ImposterBakeCamera>>,
+    settings: Res<BakeSettings>,
 ) {
     if k.just_pressed(KeyCode::KeyO) {
         for entity in cams.iter() {
@@ -289,33 +311,42 @@ pub fn impost(
 
     if k.just_pressed(KeyCode::KeyI) {
         println!("running imposter baking (every frame)");
-        let grid_size = 8;
         let mut camera = ImposterBakeCamera {
             radius: scene_handle.sphere.radius,
-            grid_size,
-            image_size: 1000,
-            grid_mode: bevy_imposter::GridMode::Hemispherical,
-            continuous: false,
+            grid_size: settings.grid_size,
+            image_size: settings.image_size,
+            grid_mode: settings.mode,
+            continuous: true,
             ..Default::default()
         };
         camera.init_target(&mut images);
 
         let mut rng = thread_rng();
-        let count = 1;
-        let range = -1400.0..=1400.0;
+        let range = scene_handle.sphere.radius * 100.0;
+        let range = -range..=range;
         let offset = Vec3::X * 0.5;
         let rotate_range = 0.0..=(PI * 2.0);
-        println!("spawning {count} imposters");
-        for _ in 0..count {
+        println!("spawning {} imposters", settings.count);
+        for _ in 0..settings.count {
             let translation = Vec3::new(
                 rng.gen_range(range.clone()),
                 rng.gen_range(range.clone()),
                 rng.gen_range(range.clone()),
             ) + offset;
             let rotation = Vec3::new(
+                rng.gen_range(rotate_range.clone())
+                    * if settings.mode == GridMode::Hemispherical {
+                        0.0
+                    } else {
+                        1.0
+                    },
                 rng.gen_range(rotate_range.clone()),
-                rng.gen_range(rotate_range.clone()),
-                rng.gen_range(rotate_range.clone()),
+                rng.gen_range(rotate_range.clone())
+                    * if settings.mode == GridMode::Hemispherical {
+                        0.0
+                    } else {
+                        1.0
+                    },
             );
             let spawned = commands
                 .spawn((
@@ -333,10 +364,14 @@ pub fn impost(
                         material: materials.add(Imposter {
                             data: ImposterData {
                                 center_and_scale: Vec3::ZERO.extend(scene_handle.sphere.radius),
-                                grid_size,
-                                flags: 1,
+                                grid_size: settings.grid_size,
+                                flags: if settings.mode == GridMode::Hemispherical {
+                                    1
+                                } else {
+                                    0
+                                },
                             },
-                            image: camera.target.clone().unwrap(),
+                            material: Some(camera.target.clone().unwrap()),
                             mode: ImposterMode::Material,
                         }),
                         ..Default::default()
@@ -386,7 +421,6 @@ fn update_lights(
 #[derive(Component)]
 pub struct Rotate;
 
-// fix issue with rotated imposters
 fn rotate(mut q: Query<&mut Transform, With<Rotate>>, time: Res<Time>) {
     for mut t in q.iter_mut() {
         t.rotation = Quat::from_rotation_y(time.elapsed_seconds());

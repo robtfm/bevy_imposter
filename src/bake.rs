@@ -260,7 +260,10 @@ impl ImposterBakeCamera {
         Ok(())
     }
 
-    pub fn save_asset_callback(&mut self, path: impl AsRef<Path>) -> impl FnOnce(bevy::prelude::Image) + Send + Sync + 'static {
+    pub fn save_asset_callback(
+        &mut self,
+        path: impl AsRef<Path>,
+    ) -> impl FnOnce(bevy::prelude::Image) + Send + Sync + 'static {
         let mut path = path.as_ref().to_owned();
         if path.extension() != Some(OsStr::new("boimp")) {
             path.set_extension("boimp");
@@ -320,6 +323,7 @@ impl Default for ImposterBakeBundle {
     }
 }
 
+#[allow(clippy::type_complexity)]
 pub fn check_imposter_visibility<QF>(
     mut thread_queues: Local<Parallel<Vec<Entity>>>,
     mut view_query: Query<(
@@ -509,7 +513,7 @@ fn check_finished_cameras(
     )>,
 ) {
     for (ent, mut cam, receiver) in q.iter_mut() {
-        if receiver
+        while receiver
             .receiver
             .as_ref()
             .and_then(|r| r.try_recv().ok())
@@ -539,6 +543,7 @@ impl Default for ImpostersBaked {
     }
 }
 
+#[allow(clippy::type_complexity)]
 pub fn extract_imposter_cameras(
     mut commands: Commands,
     mut opaque: ResMut<ViewBinnedRenderPhases<ImposterPhaseItem<Opaque3d>>>,
@@ -694,10 +699,10 @@ where
         // modify defs
         let defs = &mut descriptor.vertex.shader_defs;
         defs.retain(|d| match d {
-            ShaderDefVal::Bool(key, _) => match key.as_str() {
-                "DEPTH_PREPASS" | "NORMAL_PREPASS" | "MOTION_VECTOR_PREPASS" => false,
-                _ => true,
-            },
+            ShaderDefVal::Bool(key, _) => !matches!(
+                key.as_str(),
+                "DEPTH_PREPASS" | "NORMAL_PREPASS" | "MOTION_VECTOR_PREPASS"
+            ),
             _ => true,
         });
         defs.extend([
@@ -799,6 +804,7 @@ pub fn prepare_imposter_textures(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn queue_imposter_material_meshes<M: ImposterBakeMaterial>(
     opaque_draw_functions: Res<DrawFunctions<ImposterPhaseItem<Opaque3d>>>,
     alphamask_draw_functions: Res<DrawFunctions<ImposterPhaseItem<AlphaMask3d>>>,
@@ -1029,8 +1035,11 @@ impl ViewNode for ImposterBakeNode {
 
                     let buffer = render_device.create_buffer(&BufferDescriptor {
                         label: Some("imposter transfer buffer"),
-                        size: get_aligned_size(camera.image_size, camera.image_size, 8 as u32)
-                            as u64,
+                        size: get_aligned_size(
+                            camera.image_size,
+                            camera.image_size,
+                            TextureFormat::Rg32Uint.pixel_size() as u32,
+                        ) as u64,
                         usage: BufferUsages::MAP_READ | BufferUsages::COPY_DST,
                         mapped_at_creation: false,
                     });

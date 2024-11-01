@@ -2,9 +2,13 @@ use bevy::{
     asset::LoadState,
     prelude::*,
     render::primitives::{Aabb, Sphere},
-    scene::InstanceId, window::ExitCondition,
+    scene::InstanceId,
+    window::ExitCondition,
 };
-use bevy_imposter::{bake::{ImposterBakeBundle, ImposterBakeCamera, ImposterBakePlugin}, GridMode};
+use bevy_imposter::{
+    bake::{ImposterBakeBundle, ImposterBakeCamera, ImposterBakePlugin},
+    GridMode,
+};
 
 #[derive(Resource)]
 struct BakeSettings {
@@ -14,8 +18,6 @@ struct BakeSettings {
 }
 
 fn main() {
-    
-
     App::new()
         .insert_resource(AmbientLight {
             color: Color::WHITE,
@@ -77,7 +79,13 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
     let mut args = pico_args::Arguments::from_env();
     let grid_size = args.value_from_str("--grid").unwrap_or(8);
     let image_size = args.value_from_str("--image").unwrap_or(1024);
-    let mode = match args.value_from_str("--mode").unwrap_or("h".to_owned()).chars().next().unwrap() {
+    let mode = match args
+        .value_from_str("--mode")
+        .unwrap_or("h".to_owned())
+        .chars()
+        .next()
+        .unwrap()
+    {
         'h' => GridMode::Hemispherical,
         's' => GridMode::Spherical,
         _ => {
@@ -85,7 +93,9 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
             GridMode::Hemispherical
         }
     };
-    let scene_path = args.value_from_str("--source").unwrap_or_else(|_| "models/FlightHelmet/FlightHelmet.gltf".to_string());
+    let scene_path = args
+        .value_from_str("--source")
+        .unwrap_or_else(|_| "models/FlightHelmet/FlightHelmet.gltf".to_string());
 
     let unused = args.finish();
     if !unused.is_empty() {
@@ -127,28 +137,27 @@ fn scene_load_check(
                         );
                         info!("You can select the scene by adding '#Scene' followed by a number to the end of the file path (e.g '#Scene1' to load the second scene).");
                     }
-    
-                    let gltf_scene_handle =
-                        gltf.scenes
-                            .get(scene_handle.scene_index)
-                            .unwrap_or_else(|| {
-                                panic!(
-                                    "glTF file doesn't contain scene {}!",
-                                    scene_handle.scene_index
-                                )
-                            });
+
+                    let gltf_scene_handle = gltf
+                        .scenes
+                        .get(scene_handle.scene_index)
+                        .unwrap_or_else(|| {
+                            panic!(
+                                "glTF file doesn't contain scene {}!",
+                                scene_handle.scene_index
+                            )
+                        });
                     let scene = scenes.get_mut(gltf_scene_handle).unwrap();
-    
+
                     let mut query = scene
                         .world
                         .query::<(Option<&DirectionalLight>, Option<&PointLight>)>();
-                    scene_handle.has_light =
-                        query
-                            .iter(&scene.world)
-                            .any(|(maybe_directional_light, maybe_point_light)| {
-                                maybe_directional_light.is_some() || maybe_point_light.is_some()
-                            });
-    
+                    scene_handle.has_light = query.iter(&scene.world).any(
+                        |(maybe_directional_light, maybe_point_light)| {
+                            maybe_directional_light.is_some() || maybe_point_light.is_some()
+                        },
+                    );
+
                     let root = commands
                         .spawn(SpatialBundle {
                             transform: Transform::from_scale(Vec3::splat(1.0)),
@@ -158,14 +167,14 @@ fn scene_load_check(
                         .id();
                     scene_handle.instance_id =
                         Some(scene_spawner.spawn_as_child(gltf_scene_handle.clone_weak(), root));
-    
+
                     info!("Spawning scene...");
-                },
+                }
                 LoadState::Failed(_) => {
                     error!("failed to load");
                     std::process::exit(1);
-                },
-                _ => ()
+                }
+                _ => (),
             }
         }
         Some(instance_id) if !scene_handle.is_loaded => {
