@@ -8,6 +8,17 @@ pub mod util;
 pub enum GridMode {
     Spherical,
     Hemispherical,
+    Horizontal,
+}
+
+impl GridMode {
+    pub fn as_flags(&self) -> u32 {
+        match self {
+            GridMode::Spherical => 0,
+            GridMode::Hemispherical => 1,
+            GridMode::Horizontal => 2,
+        }
+    }
 }
 
 pub use bake::ImposterBakePlugin;

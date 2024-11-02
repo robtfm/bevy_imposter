@@ -5,7 +5,7 @@
     prepass_io::FragmentOutput,
 }
 
-#import "shaders/shared.wgsl"::{pack_pbrinput, unpack_pbrinput};
+#import boimp::shared::{pack_pbrinput, unpack_pbrinput};
 
 @fragment
 fn fragment(

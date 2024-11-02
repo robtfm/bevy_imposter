@@ -1,14 +1,23 @@
 use bevy::{
-    prelude::*,
-    render::render_resource::{AsBindGroup, ShaderRef, ShaderType},
+    asset::load_internal_asset, prelude::*, render::render_resource::{AsBindGroup, ShaderRef, ShaderType}
 };
 
 use crate::asset_loader::ImposterLoader;
+
+pub const BINDINGS_HANDLE: Handle<Shader> = Handle::weak_from_u128(659996873659996873);
+pub const FRAGMENT_HANDLE: Handle<Shader> = Handle::weak_from_u128(656126482580442360);
+pub const SHARED_HANDLE: Handle<Shader> = Handle::weak_from_u128(699899997614446892);
+pub const VERTEX_HANDLE: Handle<Shader> = Handle::weak_from_u128(591046068481766317);
 
 pub struct ImposterRenderPlugin;
 
 impl Plugin for ImposterRenderPlugin {
     fn build(&self, app: &mut App) {
+        load_internal_asset!(app, BINDINGS_HANDLE, "shaders/bindings.wgsl", Shader::from_wgsl);
+        load_internal_asset!(app, FRAGMENT_HANDLE, "shaders/fragment.wgsl", Shader::from_wgsl);
+        load_internal_asset!(app, SHARED_HANDLE, "shaders/shared.wgsl", Shader::from_wgsl);
+        load_internal_asset!(app, VERTEX_HANDLE, "shaders/vertex.wgsl", Shader::from_wgsl);
+
         app.add_plugins(MaterialPlugin::<Imposter>::default())
             .register_asset_loader(ImposterLoader);
     }
@@ -53,11 +62,11 @@ impl From<&Imposter> for ImposterKey {
 
 impl Material for Imposter {
     fn vertex_shader() -> ShaderRef {
-        "shaders/vertex_billboard.wgsl".into()
+        VERTEX_HANDLE.into()
     }
 
     fn fragment_shader() -> ShaderRef {
-        "shaders/fragment.wgsl".into()
+        FRAGMENT_HANDLE.into()
     }
 
     fn alpha_mode(&self) -> AlphaMode {

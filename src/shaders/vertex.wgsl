@@ -4,8 +4,8 @@
     view_transformations::{position_world_to_clip, position_view_to_world},
 }
 
-#import "shaders/shared.wgsl"::{ImposterVertexOut, VERTEX_BILLBOARD};
-#import "shaders/bindings.wgsl"::{imposter_data, sample_uvs_unbounded, grid_weights, oct_mode_uv_from_normal};
+#import boimp::shared::{ImposterVertexOut, VERTEX_BILLBOARD, GRID_HORIZONTAL};
+#import boimp::bindings::{imposter_data, sample_uvs_unbounded, grid_weights, oct_mode_uv_from_normal};
 
 @vertex
 fn vertex(vertex: Vertex) -> ImposterVertexOut {
@@ -19,7 +19,8 @@ fn vertex(vertex: Vertex) -> ImposterVertexOut {
     let imposter_world_position = mesh_functions::mesh_position_local_to_world(model, vec4<f32>(center, 1.0)).xyz;
     let camera_world_position = position_view_to_world(vec3<f32>(0.0));
 
-    let back = normalize(camera_world_position - imposter_world_position);
+    let is_horiz = (imposter_data.flags & GRID_HORIZONTAL) == GRID_HORIZONTAL;
+    let back = normalize((camera_world_position - imposter_world_position) * select(vec3(1.0), vec3(1.0, 0.0, 1.0), is_horiz));
     let inv_rot = transpose(mat3x3<f32>(
         model[0].xyz,
         model[1].xyz,
@@ -39,7 +40,7 @@ fn vertex(vertex: Vertex) -> ImposterVertexOut {
         let up2 = normalize(cross(back, right));
     
         let view_matrix = transpose(mat3x3(right, up2, back));
-        out.world_position = imposter_world_position.xyz + (vertex.position * scale * 2.0) * view_matrix;
+        out.world_position = imposter_world_position + (vertex.position * scale * 2.0) * view_matrix;
     } else {
         out.world_position = mesh_functions::mesh_position_local_to_world(model, vec4<f32>(vertex.position, 1.0)).xyz;
     }

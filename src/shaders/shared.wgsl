@@ -1,3 +1,5 @@
+#define_import_path boimp::shared
+
 #import bevy_pbr::{
     pbr_types::{PbrInput, STANDARD_MATERIAL_FLAGS_UNLIT_BIT, pbr_input_new},
     view_transformations::{position_ndc_to_world, frag_coord_to_ndc},
@@ -5,8 +7,14 @@
     mesh_view_bindings::view,
 };
 
+const GRID_MODE_BITS: u32 = 3;
+const GRID_SPHERICAL: u32 = 0;
 const GRID_HEMISPHERICAL: u32 = 1;
-const VERTEX_BILLBOARD: u32 = 2;
+const GRID_HORIZONTAL: u32= 2;
+
+const VERTEX_BILLBOARD: u32 = 4;
+
+const MATERIAL_MULTISAMPLE: u32 = 8;
 
 struct ImposterData {
     center_and_scale: vec4<f32>,
@@ -47,7 +55,10 @@ fn spherical_normal_from_uv(uv: vec2<f32>) -> vec3<f32> {
     return normalize(n);
 }
 
-
+fn normalize_or_zero(in: vec3<f32>) -> vec3<f32> {
+    let len = length(in);
+    return select(in / len, vec3(0.0), len < 0.00001);
+}
 // rg32uint
 // r: [0-4] r, [5-9] g, [10-14] b, [15] a, [16-23] roughness, [24-31] metallic
 // g: [0-23] normal, [24-31] flags (unlit etc)
@@ -110,11 +121,11 @@ fn unpack_rgba(input: u32) -> vec4<f32> {
 }
 
 fn unpack_roughness(input: u32) -> f32 {
-    return unpack_bits(input, 16u, 8u);
+    return clamp(unpack_bits(input, 16u, 8u), 0.5, 0.9);
 }
 
 fn unpack_metallic(input: u32) -> f32 {
-    return unpack_bits(input, 24u, 8u);
+    return clamp(unpack_bits(input, 24u, 8u), 0.1, 0.9);
 }
 
 struct UnpackedMaterialProps {
@@ -133,6 +144,19 @@ fn unpack_props(packed: vec2<u32>) -> UnpackedMaterialProps {
     props.normal = unpack_normal(packed.g);
     props.flags = unpack_flags(packed.g);
     return props;
+}
+
+fn weighted_props(a: UnpackedMaterialProps, b: UnpackedMaterialProps, weight_a: f32) -> UnpackedMaterialProps {
+    let wa = a.rgba.a * weight_a;
+    let wb = b.rgba.a * (1.0 - weight_a);
+
+    var out: UnpackedMaterialProps;
+    out.rgba = vec4(a.rgba.rgb * wa + b.rgba.rgb * wb, a.rgba.a * weight_a + b.rgba.a * (1.0 - weight_a));
+    out.roughness = a.roughness * wa + b.roughness * wb;
+    out.metallic = a.metallic * wa + b.metallic * wb;
+    out.normal = normalize_or_zero(a.normal * wa + b.normal * wb);
+    out.flags = a.flags;
+    return out;
 }
 
 fn unpack_pbrinput(props: UnpackedMaterialProps, frag_coord: vec4<f32>) -> PbrInput {

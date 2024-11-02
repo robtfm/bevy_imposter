@@ -24,6 +24,7 @@ struct BakeSettings {
     grid_size: u32,
     image_size: u32,
     count: usize,
+    multisample: bool,
 }
 
 fn main() {
@@ -108,6 +109,7 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
         .unwrap()
     {
         'h' => GridMode::Hemispherical,
+        'H' => GridMode::Horizontal,
         's' => GridMode::Spherical,
         _ => {
             warn!("unrecognized mode, use [h]emispherical or [s]pherical. defaulting to Hemispherical");
@@ -118,11 +120,12 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
     let scene_path = args
         .value_from_str("--source")
         .unwrap_or_else(|_| "models/FlightHelmet/FlightHelmet.gltf".to_string());
+    let multisample = args.contains("--multisample");
 
     let unused = args.finish();
     if !unused.is_empty() {
         println!("unrecognized arguments: {unused:?}");
-        println!("args: \n--mode [h]emispherical or [s]pherical\n--grid n (grid size, default 8)\n--image n (image size, default 1024)\n--count n (number of imposters to spawn)\n--source path (asset to load, default flight helmet)");
+        println!("args: \n--mode [h]emispherical or [s]pherical\n--grid n (grid size, default 8)\n--image n (image size, default 1024)\n--count n (number of imposters to spawn)\n--multisample (to multisample)\n--source path (asset to load, default flight helmet)");
         std::process::exit(1);
     }
 
@@ -136,6 +139,7 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
         grid_size,
         image_size,
         count,
+        multisample,
     });
 }
 
@@ -330,7 +334,7 @@ fn impost(
         let offset = Vec3::X * 0.5;
         let rotate_range = 0.0..=(PI * 2.0);
         println!("spawning {} imposters", settings.count);
-        let hemi_mult = if settings.mode == GridMode::Hemispherical {
+        let hemi_mult = if settings.mode != GridMode::Spherical {
             0.0
         } else {
             1.0
@@ -349,14 +353,7 @@ fn impost(
             let spawned = commands
                 .spawn((
                     MaterialMeshBundle {
-                        mesh: meshes.add(
-                            Plane3d {
-                                normal: Dir3::Z,
-                                half_size: Vec2::splat(0.5),
-                            }
-                            .mesh()
-                            .subdivisions(1),
-                        ),
+                        mesh: meshes.add(Rectangle::default()),
                         transform: Transform::from_translation(
                             translation + Vec3::from(scene_handle.sphere.center),
                         )
@@ -370,11 +367,7 @@ fn impost(
                             data: ImposterData {
                                 center_and_scale: Vec3::ZERO.extend(scene_handle.sphere.radius),
                                 grid_size: settings.grid_size,
-                                flags: 2 + if settings.mode == GridMode::Hemispherical {
-                                    1
-                                } else {
-                                    0
-                                },
+                                flags: 4 + settings.mode.as_flags() + if settings.multisample { 8 } else { 0 },
                             },
                             material: Some(camera.target.clone().unwrap()),
                             mode: ImposterMode::Material,

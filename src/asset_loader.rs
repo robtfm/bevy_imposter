@@ -30,10 +30,16 @@ pub enum ImposterVertexMode {
     NoBillboard,
 }
 
+#[derive(Serialize, Deserialize, Default)]
+pub struct ImposterLoaderSettings {
+    pub vertex_mode: ImposterVertexMode,
+    pub multisample: bool,
+}
+
 impl AssetLoader for ImposterLoader {
     type Asset = Imposter;
 
-    type Settings = ImposterVertexMode;
+    type Settings = ImposterLoaderSettings;
 
     type Error = anyhow::Error;
 
@@ -85,14 +91,19 @@ impl AssetLoader for ImposterLoader {
 
             let image = load_context.add_labeled_asset("texture".to_owned(), image);
 
-            let flags = match load_settings {
-                ImposterVertexMode::Billboard => 2,
+            let flags = match load_settings.vertex_mode {
+                ImposterVertexMode::Billboard => 4,
                 ImposterVertexMode::NoBillboard => 0,
+            } + match load_settings.multisample {
+                true => 8,
+                false => 0,
             } + match mode {
-                "spherical" => 0,
-                "hemispherical" => 1,
+                "spherical" => GridMode::Spherical,
+                "hemispherical" => GridMode::Hemispherical,
+                "Horizontal" => GridMode::Horizontal,
                 _ => anyhow::bail!("bad mode `{}`", mode),
-            };
+            }
+            .as_flags();
 
             Ok(Imposter {
                 data: ImposterData {
@@ -129,6 +140,7 @@ pub fn write_asset(
     let mode = match mode {
         GridMode::Spherical => "spherical",
         GridMode::Hemispherical => "hemispherical",
+        GridMode::Horizontal => "Horizontal",
     };
     zip.write_all(format!("{grid_size} {scale} {mode}").as_bytes())?;
     zip.finish()?;

@@ -8,19 +8,12 @@ use std::{
 };
 
 use bevy::{
-    core_pipeline::{
+    asset::load_internal_asset, core_pipeline::{
         core_3d::{AlphaMask3d, Opaque3d, Opaque3dBinKey, Transparent3d},
         prepass::OpaqueNoLightmap3dBinKey,
-    },
-    ecs::{entity::EntityHashSet, query::QueryFilter, system::lifetimeless::SRes},
-    pbr::{
-        alpha_mode_pipeline_key, graph::NodePbr, prepare_preprocess_bind_groups, DrawMesh,
-        GpuPreprocessNode, MaterialPipelineKey, MeshPipeline, MeshPipelineKey, PreparedMaterial,
-        PrepassPipeline, PreprocessBindGroup, RenderMaterialInstances, RenderMeshInstances,
-        SetMaterialBindGroup, SetMeshBindGroup, SetPrepassViewBindGroup, SkipGpuPreprocess,
-    },
-    prelude::*,
-    render::{
+    }, ecs::{entity::EntityHashSet, query::QueryFilter, system::lifetimeless::SRes}, pbr::{
+        alpha_mode_pipeline_key, graph::NodePbr, prepare_preprocess_bind_groups, DrawMesh, ExtendedMaterial, GpuPreprocessNode, MaterialExtension, MaterialPipelineKey, MeshPipeline, MeshPipelineKey, PreparedMaterial, PrepassPipeline, PreprocessBindGroup, RenderMaterialInstances, RenderMeshInstances, SetMaterialBindGroup, SetMeshBindGroup, SetPrepassViewBindGroup, SkipGpuPreprocess
+    }, prelude::*, render::{
         camera::{
             CameraOutputMode, CameraProjection, CameraRenderGraph, ExtractedCamera, ScalingMode,
         },
@@ -48,9 +41,7 @@ use bevy::{
             ViewUniformOffset, VisibilitySystems, VisibleEntities, WithMesh,
         },
         Extract, Render, RenderApp, RenderSet,
-    },
-    tasks::AsyncComputeTaskPool,
-    utils::Parallel,
+    }, tasks::AsyncComputeTaskPool, utils::Parallel
 };
 use wgpu::{BufferUsages, ImageCopyBuffer, ImageDataLayout};
 
@@ -61,8 +52,14 @@ pub struct ImposterBakePlugin;
 #[derive(Debug, Hash, PartialEq, Eq, Clone, RenderSubGraph)]
 pub struct ImposterBakeGraph;
 
+pub const STANDARD_BAKE_HANDLE: Handle<Shader> = Handle::weak_from_u128(72833264206534166);
+pub const SHARED_HANDLE: Handle<Shader> = Handle::weak_from_u128(699899997614446892);
+
 impl Plugin for ImposterBakePlugin {
     fn build(&self, app: &mut App) {
+        load_internal_asset!(app, STANDARD_BAKE_HANDLE, "shaders/standard_material_imposter_baker.wgsl", Shader::from_wgsl);
+        load_internal_asset!(app, SHARED_HANDLE, "shaders/shared.wgsl", Shader::from_wgsl);
+
         app.add_plugins(BinnedRenderPhasePlugin::<
             ImposterPhaseItem<Opaque3d>,
             MeshPipeline,
@@ -133,13 +130,24 @@ pub trait ImposterBakeMaterial: Material {
 
 impl ImposterBakeMaterial for StandardMaterial {
     fn imposter_fragment_shader() -> ShaderRef {
-        "shaders/standard_material_imposter_baker.wgsl".into()
+        STANDARD_BAKE_HANDLE.into()
     }
 }
 
-#[derive(Default)]
+pub trait ImposterBakeMaterialExtension: MaterialExtension {
+    fn imposter_fragment_shader() -> ShaderRef;
+}
+
 pub struct ImposterMaterialPlugin<M: ImposterBakeMaterial> {
     _p: PhantomData<fn() -> M>,
+}
+
+impl<M: ImposterBakeMaterial> Default for ImposterMaterialPlugin<M> {
+    fn default() -> Self {
+        Self {
+            _p: Default::default(),
+        }
+    }
 }
 
 impl<M: ImposterBakeMaterial> Plugin for ImposterMaterialPlugin<M>
@@ -170,6 +178,12 @@ where
                     .in_set(RenderSet::QueueMeshes)
                     .after(prepare_assets::<PreparedMaterial<M>>),
             );
+    }
+}
+
+impl<B: Material, E: MaterialExtension + ImposterBakeMaterialExtension> ImposterBakeMaterial for ExtendedMaterial<B, E> {
+    fn imposter_fragment_shader() -> ShaderRef {
+        E::imposter_fragment_shader()
     }
 }
 
@@ -238,7 +252,7 @@ impl ImposterBakeCamera {
     // Returns an async fn that can be set as the callback to save the asset once baked
     // warning: uses the current camera state - changes after this call will not be reflected
     pub fn save_asset_callback(
-        &mut self,
+        &self,
         path: impl AsRef<Path>,
     ) -> impl FnOnce(bevy::prelude::Image) + Send + Sync + 'static {
         let mut path = path.as_ref().to_owned();
@@ -399,6 +413,7 @@ fn count_expected_imposter_materials<M: ImposterBakeMaterial>(
             .filter(|e| materials.get(**e).is_ok())
             .count();
         count.0 += material_count;
+        debug!("bake entities {}: {}", std::any::type_name::<M>(), material_count);
     }
 }
 
@@ -986,6 +1001,10 @@ impl ViewNode for ImposterBakeNode {
 
             let actual = *actual.0.lock().unwrap();
             let success = actual == camera.expected_count;
+
+            if !success {
+                debug!("not ready: {}/{}", actual, camera.expected_count);
+            }
 
             if success {
                 for (x, y, view) in camera.subviews.iter().skip(1) {

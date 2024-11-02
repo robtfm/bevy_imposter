@@ -24,6 +24,11 @@ pub fn normal_from_uv(uv: Vec2, mode: GridMode) -> (Vec3, Vec3) {
             let y = 1.0 - x.abs() - z.abs();
             (x, y, z)
         }
+        GridMode::Horizontal => {
+            let x = uv.x - uv.y;
+            let z = -1.0 + uv.x + uv.y;
+            (x, 0.0, z)
+        }
     }
     .into();
     let n = n.normalize();
