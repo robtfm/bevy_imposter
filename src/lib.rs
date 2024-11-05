@@ -11,6 +11,8 @@ pub enum GridMode {
     Horizontal,
 }
 
+pub const GRID_MASK: u32 = 3;
+
 impl GridMode {
     pub fn as_flags(&self) -> u32 {
         match self {

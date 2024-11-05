@@ -7,11 +7,6 @@
     mesh_view_bindings::view,
 };
 
-const GRID_MODE_MASK: u32 = 3;
-const GRID_SPHERICAL: u32 = 0;
-const GRID_HEMISPHERICAL: u32 = 1;
-const GRID_HORIZONTAL: u32= 2;
-
 struct ImposterData {
     center_and_scale: vec4<f32>,
     grid_size: u32,

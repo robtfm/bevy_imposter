@@ -7,10 +7,6 @@
 #import boimp::shared::{
     ImposterData, 
     UnpackedMaterialProps,
-    GRID_MODE_MASK, 
-    GRID_SPHERICAL, 
-    GRID_HEMISPHERICAL, 
-    GRID_HORIZONTAL, 
     spherical_normal_from_uv,
     spherical_uv_from_normal, 
     unpack_props,
@@ -56,9 +52,9 @@ fn oct_sample_positions(uv: vec2<f32>) -> SamplePositions {
 }
 
 fn sample_positions_from_camera_dir(dir: vec3<f32>) -> SamplePositions {
-    let mode = imposter_data.flags & GRID_MODE_MASK;
     let grid_size = f32(imposter_data.grid_size);
-	if mode == GRID_HEMISPHERICAL {
+
+#ifdef GRID_HEMISPHERICAL
         // map direction to uv
         let dir2 = normalize(max(dir, vec3(-1.0, 0.0, -1.0)));
         let octant: vec3<f32> = sign(dir2);
@@ -67,7 +63,9 @@ fn sample_positions_from_camera_dir(dir: vec3<f32>) -> SamplePositions {
         let uv = (vec2<f32>(octahedron.x + octahedron.z, octahedron.z - octahedron.x) + 1.0) * 0.5;
         
         return oct_sample_positions(uv);
-    } else if mode == GRID_HORIZONTAL {
+#endif
+
+#ifdef GRID_HORIZONTAL
         let dir2 = normalize(vec2(dir.x, dir.z));
         let angle = 0.5 - atan2(dir2.x, -dir2.y) / 6.283185307;
         let index = angle * f32(imposter_data.grid_size * imposter_data.grid_size);
@@ -79,10 +77,12 @@ fn sample_positions_from_camera_dir(dir: vec3<f32>) -> SamplePositions {
         sample_positions.tile_weights[1] = fract(index);
         sample_positions.tile_weights[0] = 1.0 - sample_positions.tile_weights[1];
         return sample_positions;
-    } else {
+#endif
+
+#ifdef GRID_SPHERICAL
         let uv = spherical_uv_from_normal(dir);
         return oct_sample_positions(uv);
-    }
+#endif
 }
 
 struct Basis {
@@ -91,9 +91,9 @@ struct Basis {
 }
 
 fn oct_mode_normal_from_uv(grid_index: vec2<u32>, inv_rot: mat3x3<f32>) -> Basis {
-    let mode = imposter_data.flags & GRID_MODE_MASK;
     var n: vec3<f32>;
-	if mode == GRID_HEMISPHERICAL {
+
+#ifdef GRID_HEMISPHERICAL
         let grid_count = f32(imposter_data.grid_size);
         let tile_origin = vec2<f32>(grid_index) / grid_count;
         let tile_size = 1.0 / grid_count;
@@ -102,20 +102,24 @@ fn oct_mode_normal_from_uv(grid_index: vec2<u32>, inv_rot: mat3x3<f32>) -> Basis
         var z = -1.0 + uv.x + uv.y;
         var y = 1.0 - abs(x) - abs(z);
         n = normalize(vec3(x, y, z));
-    } else if mode == GRID_HORIZONTAL {
+#endif
+
+#ifdef GRID_HORIZONTAL
         let index = grid_index.y * imposter_data.grid_size + grid_index.x;
         let angle: f32 = 6.283185307 * f32(index) / f32(imposter_data.grid_size * imposter_data.grid_size);
         let x: f32 = sin(angle);
         let z: f32 = cos(angle);
         n = vec3<f32>(x, 0.0, z);
-    } else {
+#endif
+
+#ifdef GRID_SPHERICAL
         let grid_count = f32(imposter_data.grid_size);
         let tile_origin = vec2<f32>(grid_index) / grid_count;
         let tile_size = 1.0 / grid_count;
         let uv = tile_origin * grid_count / (grid_count - 1.0);
         let uv2 = uv * (f32(imposter_data.grid_size) - 1.0) * f32(imposter_data.grid_size);
         n = spherical_normal_from_uv(uv);
-    }
+#endif
 
     let up = select(vec3<f32>(0.0, 1.0, 0.0), vec3<f32>(0.0, 0.0, 1.0), abs(n.y) > 0.99);
 

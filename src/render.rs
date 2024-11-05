@@ -4,7 +4,7 @@ use bevy::{
     render::render_resource::{AsBindGroup, ShaderRef, ShaderType},
 };
 
-use crate::{asset_loader::ImposterLoader, GridMode};
+use crate::{asset_loader::ImposterLoader, GridMode, GRID_MASK};
 
 pub const BINDINGS_HANDLE: Handle<Shader> = Handle::weak_from_u128(659996873659996873);
 pub const FRAGMENT_HANDLE: Handle<Shader> = Handle::weak_from_u128(656126482580442360);
@@ -129,6 +129,14 @@ impl Material for Imposter {
             vert_defs.push("USE_SOURCE_UV_Y".into());
             frag_defs.push("USE_SOURCE_UV_Y".into());
         }
+        let grid_mode = match key.bind_group_data.0 & GRID_MASK {
+            i if i == GridMode::Hemispherical.as_flags() => "GRID_HEMISPHERICAL",
+            i if i == GridMode::Spherical.as_flags() => "GRID_SPHERICAL",
+            i if i == GridMode::Horizontal.as_flags() => "GRID_HORIZONTAL",
+            _ => panic!()
+        };
+        vert_defs.push(grid_mode.into());
+        frag_defs.push(grid_mode.into());
 
         Ok(())
     }

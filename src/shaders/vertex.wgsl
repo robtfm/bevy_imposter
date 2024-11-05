@@ -4,7 +4,7 @@
     view_transformations::{position_world_to_clip, position_view_to_world},
 }
 
-#import boimp::shared::{ImposterVertexOut, GRID_HORIZONTAL};
+#import boimp::shared::ImposterVertexOut;
 #import boimp::bindings::{imposter_data, sample_uvs_unbounded, grid_weights, sample_positions_from_camera_dir};
 
 @vertex
@@ -19,8 +19,11 @@ fn vertex(vertex: Vertex) -> ImposterVertexOut {
     let imposter_world_position = mesh_functions::mesh_position_local_to_world(model, vec4<f32>(center, 1.0)).xyz;
     let camera_world_position = position_view_to_world(vec3<f32>(0.0));
 
-    let is_horizontal = (imposter_data.flags & GRID_HORIZONTAL) == GRID_HORIZONTAL;
-    let back = normalize((camera_world_position - imposter_world_position) * select(vec3(1.0), vec3(1.0, 0.0, 1.0), is_horizontal));
+#ifdef GRID_HORIZONTAL
+    let back = normalize((camera_world_position - imposter_world_position) * vec3(1.0, 0.0, 1.0));
+#else
+    let back = normalize(camera_world_position - imposter_world_position);
+#endif
 
     // extract inverse rotation
     let inv_rot = transpose(mat3x3<f32>(
