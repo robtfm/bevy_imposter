@@ -2,15 +2,19 @@
 name = "bevy_imposter"
 version = "0.1.0"
 edition = "2021"
+license = "MIT OR Apache-2.0"
 
 [dependencies]
-#bevy = "0.14.2"
 bevy = { git = "https://github.com/robtfm/bevy", branch = "0.14.2-plus-16188" }
 wgpu = "0.20"
 crossbeam-channel = "0.5.13"
-rand = "0.8.5"
 async-channel = "2.2.0"
+
+# asset loader
 zip = "2"
 anyhow = "*"
-pico-args = "0.5.0"
 serde = { version = "1", features = ["derive"] }
+
+# examples
+pico-args = "0.5.0"
+rand = "0.8.5"

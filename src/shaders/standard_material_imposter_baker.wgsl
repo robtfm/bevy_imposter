@@ -1,11 +1,10 @@
 #import bevy_pbr::{
-    pbr_functions::alpha_discard,
-    pbr_fragment::pbr_input_from_standard_material,
     prepass_io::VertexOutput,
-    prepass_io::FragmentOutput,
+    pbr_fragment::pbr_input_from_standard_material,
+    pbr_functions::alpha_discard,
 }
 
-#import boimp::shared::{pack_pbrinput, unpack_pbrinput};
+#import boimp::shared::pack_pbrinput;
 
 @fragment
 fn fragment(
