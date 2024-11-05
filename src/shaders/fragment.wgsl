@@ -39,7 +39,7 @@ fn fragment(in: ImposterVertexOut) -> FragmentOutput {
 
     out.color = main_pass_post_lighting_processing(pbr_input, out.color);
 
-    // out.color = clamp(out.color, vec4(0.2, 0.0, 0.0, 0.2), vec4(1.0));
+    out.color = clamp(out.color, vec4(0.2, 0.0, 0.0, 0.2), vec4(1.0));
 
     return out;
 }

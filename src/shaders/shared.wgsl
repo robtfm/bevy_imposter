@@ -12,12 +12,6 @@ const GRID_SPHERICAL: u32 = 0;
 const GRID_HEMISPHERICAL: u32 = 1;
 const GRID_HORIZONTAL: u32= 2;
 
-const VERTEX_BILLBOARD: u32 = 4;
-
-const USE_SOURCE_UV_Y: u32 = 8;
-
-const MATERIAL_MULTISAMPLE: u32 = 16;
-
 struct ImposterData {
     center_and_scale: vec4<f32>,
     grid_size: u32,
@@ -92,9 +86,9 @@ fn pack_rgba_roughness_metallic(albedo: vec4<f32>, roughness: f32, metallic: f32
         pack_bits(albedo.r, 0u, 5u) +
         pack_bits(albedo.g, 5u, 5u) +
         pack_bits(albedo.b, 10u, 5u) +
-        pack_bits(albedo.a, 15u, 1u) +
-        pack_bits(roughness, 16u, 8u) +
-        pack_bits(metallic, 24u, 8u);
+        pack_bits(albedo.a, 15u, 5u) +
+        pack_bits(roughness, 20u, 6u) +
+        pack_bits(metallic, 26u, 6u);
 }
 
 fn pack_props(input: UnpackedMaterialProps) -> vec2<u32> {
@@ -133,16 +127,16 @@ fn unpack_rgba(input: u32) -> vec4<f32> {
         unpack_bits(input, 0u, 5u),
         unpack_bits(input, 5u, 5u),
         unpack_bits(input, 10u, 5u),
-        unpack_bits(input, 15u, 1u),
+        unpack_bits(input, 15u, 5u),
     );
 }
 
 fn unpack_roughness(input: u32) -> f32 {
-    return clamp(unpack_bits(input, 16u, 8u), 0.5, 0.9);
+    return clamp(unpack_bits(input, 20u, 6u), 0.1, 0.9);
 }
 
 fn unpack_metallic(input: u32) -> f32 {
-    return clamp(unpack_bits(input, 24u, 8u), 0.1, 0.9);
+    return clamp(unpack_bits(input, 26u, 6u), 0.1, 0.9);
 }
 
 fn unpack_props(packed: vec2<u32>) -> UnpackedMaterialProps {

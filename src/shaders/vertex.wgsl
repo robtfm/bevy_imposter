@@ -4,7 +4,7 @@
     view_transformations::{position_world_to_clip, position_view_to_world},
 }
 
-#import boimp::shared::{ImposterVertexOut, VERTEX_BILLBOARD, USE_SOURCE_UV_Y, GRID_HORIZONTAL};
+#import boimp::shared::{ImposterVertexOut, GRID_HORIZONTAL};
 #import boimp::bindings::{imposter_data, sample_uvs_unbounded, grid_weights, sample_positions_from_camera_dir};
 
 @vertex
@@ -35,7 +35,7 @@ fn vertex(vertex: Vertex) -> ImposterVertexOut {
     out.camera_direction = normalize(back * inv_rot);
     out.base_world_position = imposter_world_position;
 
-    if (imposter_data.flags & VERTEX_BILLBOARD) == VERTEX_BILLBOARD {
+#ifdef VERTEX_BILLBOARD
         let up = vec3<f32>(0.0, 1.0, 0.0);
         let right = cross(up, back);
         let up2 = cross(back, right);
@@ -46,9 +46,9 @@ fn vertex(vertex: Vertex) -> ImposterVertexOut {
             back
         ));
         out.world_position = imposter_world_position + (vertex.position * scale * 2.0) * view_matrix;
-    } else {
+#else
         out.world_position = mesh_functions::mesh_position_local_to_world(model, vec4<f32>(vertex.position, 1.0)).xyz;
-    }
+#endif
 
     out.position = position_world_to_clip(out.world_position);
     
@@ -64,13 +64,13 @@ fn vertex(vertex: Vertex) -> ImposterVertexOut {
     let uv_b = sample_uvs_unbounded(imposter_world_position, projected_world_position, inv_rot, sample_positions.tile_indices[1]);
     let uv_c = sample_uvs_unbounded(imposter_world_position, projected_world_position, inv_rot, sample_positions.tile_indices[2]);
 
-    if (imposter_data.flags & USE_SOURCE_UV_Y) == USE_SOURCE_UV_Y {
+#ifdef USE_SOURCE_UV_Y
         out.uv_ab = vec4(uv_a.x, 1.0-vertex.uv.y, uv_b.x, 1.0-vertex.uv.y);
         out.uv_c = vec2(uv_c.x, 1.0-vertex.uv.y);
-    } else {
+#else
         out.uv_ab = vec4(uv_a, uv_b);
         out.uv_c = uv_c;
-    }
+#endif
 
     return out;
 }

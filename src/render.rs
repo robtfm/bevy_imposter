@@ -12,7 +12,6 @@ pub const SHARED_HANDLE: Handle<Shader> = Handle::weak_from_u128(699899997614446
 pub const VERTEX_HANDLE: Handle<Shader> = Handle::weak_from_u128(591046068481766317);
 
 pub const VERTEX_BILLBOARD_FLAG: u32 = 4;
-
 pub const RENDER_MULTISAMPLE_FLAG: u32 = 16;
 pub const USE_SOURCE_UV_Y_FLAG: u32 = 8;
 
@@ -81,7 +80,7 @@ impl ImposterData {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct ImposterKey(bool);
+pub struct ImposterKey(u32);
 
 #[derive(Asset, TypePath, AsBindGroup, Clone, Debug)]
 #[bind_group_data(ImposterKey)]
@@ -93,8 +92,8 @@ pub struct Imposter {
 }
 
 impl From<&Imposter> for ImposterKey {
-    fn from(_value: &Imposter) -> Self {
-        Self(false)
+    fn from(value: &Imposter) -> Self {
+        Self(value.data.flags)
     }
 }
 
@@ -113,24 +112,24 @@ impl Material for Imposter {
 
     fn specialize(
         _: &bevy::pbr::MaterialPipeline<Self>,
-        _descriptor: &mut bevy::render::render_resource::RenderPipelineDescriptor,
+        descriptor: &mut bevy::render::render_resource::RenderPipelineDescriptor,
         _: &bevy::render::mesh::MeshVertexBufferLayoutRef,
-        _key: bevy::pbr::MaterialPipelineKey<Self>,
+        key: bevy::pbr::MaterialPipelineKey<Self>,
     ) -> Result<(), bevy::render::render_resource::SpecializedMeshPipelineError> {
-        // match key.bind_group_data.0 {
-        //     ImposterMode::Image => descriptor
-        //         .fragment
-        //         .as_mut()
-        //         .unwrap()
-        //         .shader_defs
-        //         .push("IMPOSTER_IMAGE".into()),
-        //     ImposterMode::Material => descriptor
-        //         .fragment
-        //         .as_mut()
-        //         .unwrap()
-        //         .shader_defs
-        //         .push("IMPOSTER_MATERIAL".into()),
-        // }
+        let vert_defs = &mut descriptor.vertex.shader_defs;
+        let frag_defs = &mut descriptor.fragment.as_mut().unwrap().shader_defs;
+
+        if (key.bind_group_data.0 & RENDER_MULTISAMPLE_FLAG) != 0 {
+            frag_defs.push("MATERIAL_MULTISAMPLE".into());
+        }
+        if (key.bind_group_data.0 & VERTEX_BILLBOARD_FLAG) != 0 {
+            vert_defs.push("VERTEX_BILLBOARD".into());
+        }
+        if (key.bind_group_data.0 & USE_SOURCE_UV_Y_FLAG) != 0 {
+            vert_defs.push("USE_SOURCE_UV_Y".into());
+            frag_defs.push("USE_SOURCE_UV_Y".into());
+        }
+
         Ok(())
     }
 }

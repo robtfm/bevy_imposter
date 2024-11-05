@@ -11,7 +11,6 @@
     GRID_SPHERICAL, 
     GRID_HEMISPHERICAL, 
     GRID_HORIZONTAL, 
-    MATERIAL_MULTISAMPLE, 
     spherical_normal_from_uv,
     spherical_uv_from_normal, 
     unpack_props,
@@ -151,7 +150,8 @@ fn sample_tile_material(uv: vec2<f32>, grid_index: vec2<u32>) -> UnpackedMateria
     let local_uv = tile_origin + tile_size * uv;
 
     let oob = any(uv <= vec2(0.0)) || any(uv >= vec2(1.0));
-    if (imposter_data.flags & MATERIAL_MULTISAMPLE) != 0u {
+
+#ifdef MATERIAL_MULTISAMPLE
         if oob {
             return unpack_props(vec2(0u));
         } else {
@@ -167,9 +167,10 @@ fn sample_tile_material(uv: vec2<f32>, grid_index: vec2<u32>) -> UnpackedMateria
             let pixel = weighted_props(pixel_top, pixel_bottom, 1.0 - frac.y);
             return pixel;
         }
-    } else {
+#else
         let coords = vec2<u32>(local_uv * vec2<f32>(textureDimensions(imposter_texture)) + 0.5);
         let pixel = textureLoad(imposter_texture, coords, 0);
         return unpack_props(select(pixel.xy, vec2(0u), oob));
-    }
+#endif
+
 }
