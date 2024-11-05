@@ -126,7 +126,7 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
         'H' => GridMode::Horizontal,
         's' => GridMode::Spherical,
         _ => {
-            warn!("unrecognized mode, use [h]emispherical or [s]pherical. defaulting to Hemispherical");
+            warn!("unrecognized mode, use [h]emispherical or [s]pherical. defaulting to hemispherical");
             GridMode::Hemispherical
         }
     };

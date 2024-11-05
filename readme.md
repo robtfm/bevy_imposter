@@ -39,9 +39,38 @@ commands.spawn(MaterialMeshBundle::<Imposter> {
 for billboarding, use a `Rectangle` or `Plane3d::new(Vec3::Z, Vec2::splat(0.5))` mesh. for non-billboarding, any mesh will do.
 
 # examples:
-- `dynamic` - runs baking every frame (once 'I' is pressed, and until 'O' is pressed), and spawns a large number of imposters based on the bake results.
-- `save_asset` - loads a gltf, bakes and saves an imposter, with baking params from the command line.
-- `load_asset` - loads a previously baked imposter, with rendering params from the command line.
+## `dynamic` 
+runs baking every frame (once 'I' is pressed, and until 'O' is pressed), and spawns a large number of imposters based on the bake results.
+
+args:
+- `--grid <n>` : number of separate snapshots (^2) (default 15)
+- `--image <n>` : total size of texture image (^2) (default 1024)
+- `--mode [s]pherical | [h]emispherical | [H]orizontal` : how the snapshots are arranged (default hemispherical)
+- `--count <n>` : number of imposters to spawn (default 1000)
+- `--source <path>` : gltf to load (default FlightHelmet)
+- `--multisample-source <n>` : how many samples to average over when baking (^2) (default 1)
+- `--multisample-target` : average samples over nearby material pixels when rendering imposters (default false)
+
+
+## `save_asset`
+loads a gltf, bakes and saves an imposter, with baking params from the commandine.
+
+args:
+- `--grid <n>` : number of separate snapshots (^2) (default 8)
+- `--image <n>` : total size of texture image (^2) (default 512)
+- `--mode [s]pherical | [h]emispherical | [H]orizontal` : how the snapshots are arranged (default hemispherical)
+- `--source <path>` : gltf to load (default FlightHelmet)
+- `--multisample <n>` : how many samples to average over when baking (^2) (default 8)
+- `--output <path>` : where to output to (default "assets/boimps/output.boimp")
+
+
+## `load_asset`
+loads a previously baked imposter, with rendering params from the command line.
+
+args:
+- `--source <path>` : gltf to load (default "assets/boimps/output.boimp")
+- `--multisample` : average samples over nearby material pixels when rendering imposters (default false)
+
 
 # todo
 - integrate with visibility ranges

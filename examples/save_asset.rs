@@ -15,6 +15,8 @@ struct BakeSettings {
     mode: GridMode,
     grid_size: u32,
     image_size: u32,
+    multisample: u32,
+    output: String,
 }
 
 fn main() {
@@ -90,13 +92,16 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
         'H' => GridMode::Horizontal,
         's' => GridMode::Spherical,
         _ => {
-            warn!("unrecognized mode, use [h]emispherical or [s]pherical. defaulting to Hemispherical");
+            warn!("unrecognized mode, use [h]emispherical or [s]pherical. defaulting to hemispherical");
             GridMode::Hemispherical
         }
     };
     let scene_path = args
         .value_from_str("--source")
         .unwrap_or_else(|_| "models/FlightHelmet/FlightHelmet.gltf".to_string());
+    let multisample = args.value_from_str("--multisample-source").unwrap_or(8);
+
+    let output = args.value_from_str("--output").unwrap_or("assets/boimps/output.boimp".to_owned());
 
     let unused = args.finish();
     if !unused.is_empty() {
@@ -114,6 +119,8 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
         mode,
         grid_size,
         image_size,
+        multisample,
+        output,
     });
 }
 
@@ -241,11 +248,14 @@ fn setup_scene_after_load(
             image_size: settings.image_size,
             grid_mode: settings.mode,
             continuous: false,
+            multisample: settings.multisample,
             ..Default::default()
         };
-        let save_callback = camera.save_asset_callback("assets/boimps/output.boimp");
-        camera.set_callback(|image| {
-            info!("saving imposter to `assets/boimps/output.boimp`");
+        let save_callback = camera.save_asset_callback(&settings.output);
+
+        let output = settings.output.clone();
+        camera.set_callback(move |image| {
+            info!("saving imposter to `{}`", output);
             save_callback(image);
             std::process::exit(0);
         });
