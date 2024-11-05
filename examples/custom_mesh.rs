@@ -1,7 +1,7 @@
 // niche use case: providing a custom mesh allows for explicit control of the sampled y coords for horizontal billboards
 
 use bevy::{asset::LoadState, prelude::*};
-use bevy_imposter::{
+use boimp::{
     asset_loader::{ImposterLoaderSettings, ImposterVertexMode},
     render::Imposter,
     ImposterRenderPlugin,

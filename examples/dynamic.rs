@@ -14,7 +14,7 @@ use bevy::{
     scene::InstanceId,
     utils::hashbrown::HashMap,
 };
-use bevy_imposter::{
+use boimp::{
     GridMode, Imposter, ImposterBakeBundle, ImposterBakeCamera, ImposterBakePlugin, ImposterData,
     ImposterRenderPlugin,
 };

@@ -8,7 +8,7 @@ use bevy::{
     scene::InstanceId,
     window::ExitCondition,
 };
-use bevy_imposter::{GridMode, ImposterBakeBundle, ImposterBakeCamera, ImposterBakePlugin};
+use boimp::{GridMode, ImposterBakeBundle, ImposterBakeCamera, ImposterBakePlugin};
 
 #[derive(Resource)]
 struct BakeSettings {

@@ -1,7 +1,7 @@
 // load and display a saved imposter
 
 use bevy::{asset::LoadState, prelude::*};
-use bevy_imposter::{Imposter, ImposterLoaderSettings, ImposterRenderPlugin};
+use boimp::{Imposter, ImposterLoaderSettings, ImposterRenderPlugin};
 use camera_controller::{CameraController, CameraControllerPlugin};
 
 #[path = "helpers/camera_controller.rs"]
