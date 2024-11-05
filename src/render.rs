@@ -133,7 +133,7 @@ impl Material for Imposter {
             i if i == GridMode::Hemispherical.as_flags() => "GRID_HEMISPHERICAL",
             i if i == GridMode::Spherical.as_flags() => "GRID_SPHERICAL",
             i if i == GridMode::Horizontal.as_flags() => "GRID_HORIZONTAL",
-            _ => panic!()
+            _ => panic!(),
         };
         vert_defs.push(grid_mode.into());
         frag_defs.push(grid_mode.into());
