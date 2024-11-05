@@ -4,7 +4,10 @@ use bevy::{
     render::render_resource::{AsBindGroup, ShaderRef, ShaderType},
 };
 
-use crate::{asset_loader::ImposterLoader, GridMode, GRID_MASK};
+use crate::{
+    asset_loader::ImposterLoader,
+    oct_coords::{GridMode, GRID_MASK},
+};
 
 pub const BINDINGS_HANDLE: Handle<Shader> = Handle::weak_from_u128(659996873659996873);
 pub const FRAGMENT_HANDLE: Handle<Shader> = Handle::weak_from_u128(656126482580442360);

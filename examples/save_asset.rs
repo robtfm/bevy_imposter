@@ -1,4 +1,5 @@
 // spawn a gltf and create an imposter from it
+// scene mgmt copied wholesale from bevy
 
 use bevy::{
     asset::LoadState,
@@ -7,10 +8,7 @@ use bevy::{
     scene::InstanceId,
     window::ExitCondition,
 };
-use bevy_imposter::{
-    bake::{ImposterBakeBundle, ImposterBakeCamera, ImposterBakePlugin},
-    GridMode,
-};
+use bevy_imposter::{GridMode, ImposterBakeBundle, ImposterBakeCamera, ImposterBakePlugin};
 
 #[derive(Resource)]
 struct BakeSettings {

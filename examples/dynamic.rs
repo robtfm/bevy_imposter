@@ -1,5 +1,6 @@
 // spawn a gltf and bake dynamic imposters every frame
-// the gltf could be animated or moved, and the changes would be reflected in every imposter.
+// the gltf can be animated or moved, and the changes are reflected in every imposter.
+// scene mgmt copied wholesale from bevy
 
 use std::f32::consts::{FRAC_PI_4, PI};
 
@@ -14,9 +15,8 @@ use bevy::{
     utils::hashbrown::HashMap,
 };
 use bevy_imposter::{
-    bake::{ImposterBakeBundle, ImposterBakeCamera, ImposterBakePlugin},
-    render::{Imposter, ImposterData},
-    GridMode, ImposterRenderPlugin,
+    GridMode, Imposter, ImposterBakeBundle, ImposterBakeCamera, ImposterBakePlugin, ImposterData,
+    ImposterRenderPlugin,
 };
 use camera_controller::{CameraController, CameraControllerPlugin};
 use rand::{thread_rng, Rng};

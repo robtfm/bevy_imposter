@@ -15,8 +15,8 @@ use serde::{Deserialize, Serialize};
 use wgpu::{Extent3d, TextureFormat};
 
 use crate::{
+    oct_coords::GridMode,
     render::{Imposter, ImposterData, RENDER_MULTISAMPLE_FLAG, USE_SOURCE_UV_Y_FLAG},
-    GridMode,
 };
 
 pub struct ImposterLoader;

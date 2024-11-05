@@ -1,3 +1,5 @@
+// copied wholesale from bevy
+
 //! A freecam-style camera controller plugin.
 //! To use in your own application:
 //! - Copy the code for the [`CameraControllerPlugin`] and add the plugin to your App.

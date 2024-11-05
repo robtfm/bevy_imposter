@@ -1,7 +1,25 @@
 use std::f32::consts::PI;
 
-use crate::GridMode;
 use bevy::prelude::*;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GridMode {
+    Spherical,
+    Hemispherical,
+    Horizontal,
+}
+
+impl GridMode {
+    pub fn as_flags(&self) -> u32 {
+        match self {
+            GridMode::Spherical => 0,
+            GridMode::Hemispherical => 1,
+            GridMode::Horizontal => 2,
+        }
+    }
+}
+
+pub const GRID_MASK: u32 = 3;
 
 pub fn normal_from_grid(grid_pos: UVec2, mode: GridMode, grid_size: u32) -> (Vec3, Vec3) {
     let n: Vec3 = match mode {

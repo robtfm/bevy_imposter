@@ -62,7 +62,10 @@ use wgpu::{
     ShaderStages, StorageTextureAccess,
 };
 
-use crate::{asset_loader::write_asset, oct_coords::normal_from_grid, GridMode};
+use crate::{
+    asset_loader::write_asset,
+    oct_coords::{normal_from_grid, GridMode},
+};
 
 pub struct ImposterBakePlugin;
 
