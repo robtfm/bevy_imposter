@@ -1,15 +1,21 @@
+// spawn a gltf and bake dynamic imposters every frame
+// the gltf could be animated or moved, and the changes would be reflected in every imposter.
+
 use std::f32::consts::{FRAC_PI_4, PI};
 
 use bevy::{
+    animation::AnimationTarget,
     asset::LoadState,
     diagnostic::{FrameTimeDiagnosticsPlugin, LogDiagnosticsPlugin},
+    ecs::entity::EntityHashMap,
     prelude::*,
     render::primitives::{Aabb, Sphere},
     scene::InstanceId,
+    utils::hashbrown::HashMap,
 };
 use bevy_imposter::{
     bake::{ImposterBakeBundle, ImposterBakeCamera, ImposterBakePlugin},
-    render::{Imposter, ImposterData, ImposterMode},
+    render::{Imposter, ImposterData},
     GridMode, ImposterRenderPlugin,
 };
 use camera_controller::{CameraController, CameraControllerPlugin};
@@ -24,7 +30,8 @@ struct BakeSettings {
     grid_size: u32,
     image_size: u32,
     count: usize,
-    multisample: bool,
+    multisample_source: u32,
+    multisample_target: bool,
 }
 
 fn main() {
@@ -54,7 +61,14 @@ fn main() {
         .add_systems(PreUpdate, setup_scene_after_load)
         .add_systems(
             Update,
-            (scene_load_check, impost, update_lights, rotate, swap_old),
+            (
+                scene_load_check,
+                impost,
+                update_lights,
+                rotate,
+                swap_old,
+                setup_anim_after_load,
+            ),
         )
         .run();
 }
@@ -99,7 +113,7 @@ impl SceneHandle {
 
 fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
     let mut args = pico_args::Arguments::from_env();
-    let grid_size = args.value_from_str("--grid").unwrap_or(8);
+    let grid_size = args.value_from_str("--grid").unwrap_or(15);
     let image_size = args.value_from_str("--image").unwrap_or(1024);
     let mode = match args
         .value_from_str("--mode")
@@ -120,12 +134,13 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
     let scene_path = args
         .value_from_str("--source")
         .unwrap_or_else(|_| "models/FlightHelmet/FlightHelmet.gltf".to_string());
-    let multisample = args.contains("--multisample");
+    let multisample_target = args.contains("--multisample-target");
+    let multisample_source = args.value_from_str("--multisample-source").unwrap_or(1);
 
     let unused = args.finish();
     if !unused.is_empty() {
         println!("unrecognized arguments: {unused:?}");
-        println!("args: \n--mode [h]emispherical or [s]pherical\n--grid n (grid size, default 8)\n--image n (image size, default 1024)\n--count n (number of imposters to spawn)\n--multisample (to multisample)\n--source path (asset to load, default flight helmet)");
+        println!("args: \n--mode [h]emispherical or [s]pherical\n--grid n (grid size, default 15)\n--image n (image size, default 1024)\n--count n (number of imposters to spawn)\n--multisample-source <n> (to multisample when generating the imposter, try 8)\n--multisample-target (to multisample when rendering imposters)\n--source <path> (asset to load, default flight helmet)");
         std::process::exit(1);
     }
 
@@ -139,7 +154,8 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
         grid_size,
         image_size,
         count,
-        multisample,
+        multisample_source,
+        multisample_target,
     });
 }
 
@@ -190,7 +206,6 @@ fn scene_load_check(
                         transform: Transform::from_scale(Vec3::splat(1.0)),
                         ..Default::default()
                     })
-                    // .insert(Rotate)
                     .id();
                 scene_handle.instance_id =
                     Some(scene_spawner.spawn_as_child(gltf_scene_handle.clone_weak(), root));
@@ -205,6 +220,105 @@ fn scene_load_check(
             }
         }
         Some(_) => {}
+    }
+}
+
+fn setup_anim_after_load(
+    mut setup: Local<bool>,
+    mut players: Query<&mut AnimationPlayer>,
+    targets: Query<(Entity, &AnimationTarget)>,
+    parents: Query<&Parent>,
+    scene_handle: Res<SceneHandle>,
+    clips: Res<Assets<AnimationClip>>,
+    gltf_assets: Res<Assets<Gltf>>,
+    asset_server: Res<AssetServer>,
+    mut graphs: ResMut<Assets<AnimationGraph>>,
+    mut commands: Commands,
+) {
+    if scene_handle.is_loaded && !*setup {
+        *setup = true;
+    } else {
+        return;
+    }
+
+    let gltf = gltf_assets.get(&scene_handle.gltf_handle).unwrap();
+    let animations = &gltf.animations;
+    if animations.is_empty() {
+        return;
+    }
+
+    // copied wholesale from animation_plugin
+    let animation_target_id_to_entity: HashMap<_, _> = targets
+        .iter()
+        .map(|(entity, target)| (target.id, entity))
+        .collect();
+
+    let mut player_to_graph: EntityHashMap<(AnimationGraph, Vec<AnimationNodeIndex>)> =
+        EntityHashMap::default();
+
+    for (clip_id, clip) in clips.iter() {
+        let mut ancestor_player = None;
+        for target_id in clip.curves().keys() {
+            // If the animation clip refers to entities that aren't present in
+            // the scene, bail.
+            let Some(&target) = animation_target_id_to_entity.get(target_id) else {
+                continue;
+            };
+
+            // Find the nearest ancestor animation player.
+            let mut current = Some(target);
+            while let Some(entity) = current {
+                if players.contains(entity) {
+                    match ancestor_player {
+                        None => {
+                            // If we haven't found a player yet, record the one
+                            // we found.
+                            ancestor_player = Some(entity);
+                        }
+                        Some(ancestor) => {
+                            // If we have found a player, then make sure it's
+                            // the same player we located before.
+                            if ancestor != entity {
+                                // It's a different player. Bail.
+                                ancestor_player = None;
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                // Go to the next parent.
+                current = parents.get(entity).ok().map(|parent| parent.get());
+            }
+        }
+
+        let Some(ancestor_player) = ancestor_player else {
+            warn!(
+                "Unexpected animation hierarchy for animation clip {:?}; ignoring.",
+                clip_id
+            );
+            continue;
+        };
+
+        let Some(clip_handle) = asset_server.get_id_handle(clip_id) else {
+            warn!("Clip {:?} wasn't loaded.", clip_id);
+            continue;
+        };
+
+        let &mut (ref mut graph, ref mut clip_indices) =
+            player_to_graph.entry(ancestor_player).or_default();
+        let node_index = graph.add_clip(clip_handle, 1.0, graph.root);
+        clip_indices.push(node_index);
+    }
+
+    for (player_entity, (graph, clips)) in player_to_graph {
+        let Ok(mut player) = players.get_mut(player_entity) else {
+            warn!("Animation targets referenced a nonexistent player. This shouldn't happen.");
+            continue;
+        };
+        let graph = graphs.add(graph);
+        player.play(clips[0]).repeat();
+        commands.entity(player_entity).insert(graph);
     }
 }
 
@@ -324,6 +438,7 @@ fn impost(
             image_size: settings.image_size,
             grid_mode: settings.mode,
             continuous: true,
+            multisample: settings.multisample_source,
             ..Default::default()
         };
         camera.init_target(&mut images);
@@ -350,35 +465,35 @@ fn impost(
                 rng.gen_range(rotate_range.clone()),
                 rng.gen_range(rotate_range.clone()) * hemi_mult,
             );
-            let spawned = commands
-                .spawn((
-                    MaterialMeshBundle {
-                        mesh: meshes.add(Rectangle::default()),
-                        transform: Transform::from_translation(
-                            translation + Vec3::from(scene_handle.sphere.center),
-                        )
-                        .with_rotation(Quat::from_euler(
-                            EulerRot::XYZ,
-                            rotation.x,
-                            rotation.y,
-                            rotation.z,
-                        )),
-                        material: materials.add(Imposter {
-                            data: ImposterData {
-                                center_and_scale: Vec3::ZERO.extend(scene_handle.sphere.radius),
-                                grid_size: settings.grid_size,
-                                flags: 4 + settings.mode.as_flags() + if settings.multisample { 8 } else { 0 },
-                            },
-                            material: Some(camera.target.clone().unwrap()),
-                            mode: ImposterMode::Material,
-                        }),
-                        ..Default::default()
-                    },
-                    // Rotate,
-                ))
-                .id();
-
-            println!("added {spawned:?}");
+            commands.spawn((MaterialMeshBundle {
+                mesh: meshes.add(
+                    Plane3d::new(Vec3::Z, Vec2::splat(0.5))
+                        .mesh()
+                        .subdivisions(2),
+                ),
+                transform: Transform::from_translation(
+                    translation + Vec3::from(scene_handle.sphere.center),
+                )
+                .with_rotation(Quat::from_euler(
+                    EulerRot::XYZ,
+                    rotation.x,
+                    rotation.y,
+                    rotation.z,
+                )),
+                material: materials.add(Imposter {
+                    data: ImposterData::new(
+                        Vec3::ZERO,
+                        scene_handle.sphere.radius,
+                        settings.grid_size,
+                        settings.mode,
+                        true,
+                        settings.multisample_target,
+                        false,
+                    ),
+                    material: Some(camera.target.clone().unwrap()),
+                }),
+                ..Default::default()
+            },));
         }
 
         commands.spawn(ImposterBakeBundle {

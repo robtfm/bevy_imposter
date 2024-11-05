@@ -1,3 +1,5 @@
+// spawn a gltf and create an imposter from it
+
 use bevy::{
     asset::LoadState,
     prelude::*,

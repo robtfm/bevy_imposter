@@ -8,12 +8,21 @@ use std::{
 };
 
 use bevy::{
-    asset::load_internal_asset, core_pipeline::{
+    asset::load_internal_asset,
+    core_pipeline::{
         core_3d::{AlphaMask3d, Opaque3d, Opaque3dBinKey, Transparent3d},
         prepass::OpaqueNoLightmap3dBinKey,
-    }, ecs::{entity::EntityHashSet, query::QueryFilter, system::lifetimeless::SRes}, pbr::{
-        alpha_mode_pipeline_key, graph::NodePbr, prepare_preprocess_bind_groups, DrawMesh, ExtendedMaterial, GpuPreprocessNode, MaterialExtension, MaterialPipelineKey, MeshPipeline, MeshPipelineKey, PreparedMaterial, PrepassPipeline, PreprocessBindGroup, RenderMaterialInstances, RenderMeshInstances, SetMaterialBindGroup, SetMeshBindGroup, SetPrepassViewBindGroup, SkipGpuPreprocess
-    }, prelude::*, render::{
+    },
+    ecs::{entity::EntityHashSet, query::QueryFilter, system::lifetimeless::SRes},
+    pbr::{
+        alpha_mode_pipeline_key, graph::NodePbr, prepare_preprocess_bind_groups, DrawMesh,
+        ExtendedMaterial, GpuPreprocessNode, MaterialExtension, MaterialPipelineKey, MeshPipeline,
+        MeshPipelineKey, PreparedMaterial, PrepassPipeline, PreprocessBindGroup,
+        RenderMaterialInstances, RenderMeshInstances, SetMaterialBindGroup, SetMeshBindGroup,
+        SetPrepassViewBindGroup, SkipGpuPreprocess,
+    },
+    prelude::*,
+    render::{
         camera::{
             CameraOutputMode, CameraProjection, CameraRenderGraph, ExtractedCamera, ScalingMode,
         },
@@ -29,23 +38,31 @@ use bevy::{
             ViewSortedRenderPhases,
         },
         render_resource::{
-            Buffer, BufferDescriptor, CachedRenderPipelineId, ColorTargetState, ColorWrites,
-            CommandEncoderDescriptor, Extent3d, FragmentState, PipelineCache, RenderPassDescriptor,
-            ShaderDefVal, ShaderRef, SpecializedMeshPipeline, SpecializedMeshPipelines, StoreOp,
-            Texture, TextureDescriptor, TextureDimension, TextureFormat, TextureUsages,
+            binding_types::{texture_storage_2d, uniform_buffer},
+            BindGroup, BindGroupEntries, BindGroupLayout, BindGroupLayoutEntries, Buffer,
+            BufferDescriptor, CachedComputePipelineId, CachedRenderPipelineId, ColorTargetState,
+            ColorWrites, CommandEncoderDescriptor, ComputePipelineDescriptor, Extent3d,
+            FragmentState, PipelineCache, RenderPassDescriptor, ShaderDefVal, ShaderRef,
+            ShaderType, SpecializedMeshPipeline, SpecializedMeshPipelines, StoreOp, Texture,
+            TextureDescriptor, TextureDimension, TextureFormat, TextureUsages, UniformBuffer,
         },
-        renderer::RenderDevice,
+        renderer::{RenderDevice, RenderQueue},
         texture::{ColorAttachment, GpuImage, ImageSampler, TextureCache, TextureFormatPixelInfo},
         view::{
             ColorGrading, ExtractedView, NoFrustumCulling, RenderLayers, ViewDepthTexture,
             ViewUniformOffset, VisibilitySystems, VisibleEntities, WithMesh,
         },
         Extract, Render, RenderApp, RenderSet,
-    }, tasks::AsyncComputeTaskPool, utils::Parallel
+    },
+    tasks::AsyncComputeTaskPool,
+    utils::Parallel,
 };
-use wgpu::{BufferUsages, ImageCopyBuffer, ImageDataLayout};
+use wgpu::{
+    BufferUsages, ComputePassDescriptor, ImageCopyBuffer, ImageDataLayout, PushConstantRange,
+    ShaderStages, StorageTextureAccess,
+};
 
-use crate::{asset_loader::write_asset, oct_coords::normal_from_uv, GridMode};
+use crate::{asset_loader::write_asset, oct_coords::normal_from_grid, GridMode};
 
 pub struct ImposterBakePlugin;
 
@@ -54,11 +71,23 @@ pub struct ImposterBakeGraph;
 
 pub const STANDARD_BAKE_HANDLE: Handle<Shader> = Handle::weak_from_u128(72833264206534166);
 pub const SHARED_HANDLE: Handle<Shader> = Handle::weak_from_u128(699899997614446892);
+pub const IMPOSTER_BLIT_HANDLE: Handle<Shader> = Handle::weak_from_u128(269989999761444689);
 
 impl Plugin for ImposterBakePlugin {
     fn build(&self, app: &mut App) {
-        load_internal_asset!(app, STANDARD_BAKE_HANDLE, "shaders/standard_material_imposter_baker.wgsl", Shader::from_wgsl);
+        load_internal_asset!(
+            app,
+            STANDARD_BAKE_HANDLE,
+            "shaders/standard_material_imposter_baker.wgsl",
+            Shader::from_wgsl
+        );
         load_internal_asset!(app, SHARED_HANDLE, "shaders/shared.wgsl", Shader::from_wgsl);
+        load_internal_asset!(
+            app,
+            IMPOSTER_BLIT_HANDLE,
+            "shaders/imposter_blit.wgsl",
+            Shader::from_wgsl
+        );
 
         app.add_plugins(BinnedRenderPhasePlugin::<
             ImposterPhaseItem<Opaque3d>,
@@ -98,6 +127,7 @@ impl Plugin for ImposterBakePlugin {
                 Render,
                 (
                     prepare_imposter_textures.in_set(RenderSet::PrepareResources),
+                    prepare_imposter_bindgroups.in_set(RenderSet::PrepareBindGroups),
                     copy_preprocess_bindgroups
                         .in_set(RenderSet::PrepareBindGroups)
                         .after(prepare_preprocess_bind_groups),
@@ -121,6 +151,14 @@ impl Plugin for ImposterBakePlugin {
             );
 
         app.add_plugins(ImposterMaterialPlugin::<StandardMaterial>::default());
+    }
+
+    fn finish(&self, app: &mut App) {
+        let Some(render_app) = app.get_sub_app_mut(RenderApp) else {
+            return;
+        };
+
+        render_app.init_resource::<ImposterBlitPipeline>();
     }
 }
 
@@ -181,7 +219,9 @@ where
     }
 }
 
-impl<B: Material, E: MaterialExtension + ImposterBakeMaterialExtension> ImposterBakeMaterial for ExtendedMaterial<B, E> {
+impl<B: Material, E: MaterialExtension + ImposterBakeMaterialExtension> ImposterBakeMaterial
+    for ExtendedMaterial<B, E>
+{
     fn imposter_fragment_shader() -> ShaderRef {
         E::imposter_fragment_shader()
     }
@@ -189,14 +229,25 @@ impl<B: Material, E: MaterialExtension + ImposterBakeMaterialExtension> Imposter
 
 #[derive(Component, Clone)]
 pub struct ImposterBakeCamera {
+    // area to capture
     pub radius: f32,
+    // number of snapshots to pack
     pub grid_size: u32,
+    // total image size
     pub image_size: u32,
+    // number of samples to average over (power of 1,2,4,8,etc)
+    pub multisample: u32,
+    // camera angles to use for snapshots
     pub grid_mode: GridMode,
+    // optional output, can be used in a material for dynamic imposters or previews
     pub target: Option<Handle<Image>>,
+    // camera order, for dynamic should be less than your 3d camera
     pub order: isize,
+    // whether to snapshot every frame or stop after a single successful snapshot
     pub continuous: bool,
+    // signal for completion (if not continuous) - written by the library
     pub is_finished: bool,
+    // optional callback for completion
     pub callback: Option<ImageCallback>,
 }
 
@@ -206,6 +257,7 @@ impl Default for ImposterBakeCamera {
             radius: 1.0,
             grid_size: 8,
             image_size: 512,
+            multisample: 8,
             grid_mode: GridMode::Spherical,
             target: None,
             order: -99,
@@ -217,6 +269,7 @@ impl Default for ImposterBakeCamera {
 }
 
 impl ImposterBakeCamera {
+    // create a target image of the right format and size
     pub fn init_target(&mut self, images: &mut Assets<Image>) {
         let size = Extent3d {
             width: self.image_size,
@@ -245,11 +298,12 @@ impl ImposterBakeCamera {
         self.target = Some(images.add(image));
     }
 
+    // add a callback to be run on completion
     pub fn set_callback(&mut self, callback: impl FnOnce(Image) + Send + Sync + 'static) {
         self.callback = Some(Arc::new(Mutex::new(Some(Box::new(callback)))));
     }
 
-    // Returns an async fn that can be set as the callback to save the asset once baked
+    // Returns an async fn that can be set as the callback to save the asset once baked.
     // warning: uses the current camera state - changes after this call will not be reflected
     pub fn save_asset_callback(
         &self,
@@ -413,7 +467,11 @@ fn count_expected_imposter_materials<M: ImposterBakeMaterial>(
             .filter(|e| materials.get(**e).is_ok())
             .count();
         count.0 += material_count;
-        debug!("bake entities {}: {}", std::any::type_name::<M>(), material_count);
+        debug!(
+            "bake entities {}: {}",
+            std::any::type_name::<M>(),
+            material_count
+        );
     }
 }
 
@@ -421,6 +479,7 @@ fn count_expected_imposter_materials<M: ImposterBakeMaterial>(
 pub struct ExtractedImposterBakeCamera {
     pub grid_size: u32,
     pub image_size: u32,
+    pub multisample: u32,
     pub target: Option<Handle<Image>>,
     pub subviews: Vec<(u32, u32, Entity)>,
     pub expected_count: usize,
@@ -576,11 +635,10 @@ pub fn extract_imposter_cameras(
         };
         projection.update(0.0, 0.0);
         let clip_from_view = projection.get_clip_from_view();
-        for x in 0..camera.grid_size {
-            for y in 0..camera.grid_size {
-                let uv = UVec2::new(x, y).as_vec2() / (camera.grid_size - 1) as f32;
-
-                let (normal, up) = normal_from_uv(uv, camera.grid_mode);
+        for y in 0..camera.grid_size {
+            for x in 0..camera.grid_size {
+                let (normal, up) =
+                    normal_from_grid(UVec2::new(x, y), camera.grid_mode, camera.grid_size);
                 let camera_transform = GlobalTransform::from(
                     Transform::from_translation(center + normal * camera.radius)
                         .looking_at(center, up),
@@ -606,6 +664,7 @@ pub fn extract_imposter_cameras(
                 grid_size: camera.grid_size,
                 image_size: camera.image_size,
                 target: camera.target.clone(),
+                multisample: camera.multisample,
                 subviews,
                 expected_count: expected_count.0,
                 channel: channel.sender.clone(),
@@ -732,13 +791,61 @@ where
     }
 }
 
-#[derive(Component)]
-pub struct ImposterTextures {
-    pub output: ColorAttachment,
-    pub depth: ViewDepthTexture,
-    pub target: Option<Texture>,
+#[derive(ShaderType)]
+pub struct BlitUniform {
+    samples: u32,
 }
 
+#[derive(Resource)]
+pub struct ImposterBlitPipeline {
+    layout: BindGroupLayout,
+    pipeline: CachedComputePipelineId,
+}
+
+impl FromWorld for ImposterBlitPipeline {
+    fn from_world(world: &mut World) -> Self {
+        let device = world.resource::<RenderDevice>();
+        let pipeline_cache = world.resource::<PipelineCache>();
+
+        let layout = device.create_bind_group_layout(
+            "imposter_blit_layout",
+            &BindGroupLayoutEntries::sequential(
+                ShaderStages::COMPUTE,
+                (
+                    texture_storage_2d(TextureFormat::Rg32Uint, StorageTextureAccess::ReadOnly),
+                    uniform_buffer::<BlitUniform>(false),
+                    texture_storage_2d(TextureFormat::Rg32Uint, StorageTextureAccess::WriteOnly),
+                ),
+            ),
+        );
+
+        let pipeline = pipeline_cache.queue_compute_pipeline(ComputePipelineDescriptor {
+            label: Some("imposter_blit_pipeline".into()),
+            layout: vec![layout.clone()],
+            push_constant_ranges: vec![PushConstantRange {
+                stages: ShaderStages::COMPUTE,
+                range: 0..8,
+            }],
+            shader: IMPOSTER_BLIT_HANDLE,
+            shader_defs: Vec::new(),
+            entry_point: "blend_materials".into(),
+        });
+
+        Self { layout, pipeline }
+    }
+}
+
+#[derive(Component)]
+pub struct ImposterResources {
+    pub output: ColorAttachment,
+    pub intermediate: Option<ColorAttachment>,
+    pub depth: ViewDepthTexture,
+    pub target: Option<Texture>,
+    pub blit_bindgroup: Option<BindGroup>,
+    pub blit_buffer: Option<UniformBuffer<BlitUniform>>,
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn prepare_imposter_textures(
     mut commands: Commands,
     mut texture_cache: ResMut<TextureCache>,
@@ -746,35 +853,76 @@ pub fn prepare_imposter_textures(
     opaque_phases: Res<ViewBinnedRenderPhases<ImposterPhaseItem<Opaque3d>>>,
     images: Res<RenderAssets<GpuImage>>,
     views: Query<(Entity, &ExtractedImposterBakeCamera)>,
+    device: Res<RenderDevice>,
+    queue: Res<RenderQueue>,
 ) {
     for (entity, camera) in views.iter() {
         if !opaque_phases.contains_key(&entity) {
             continue;
         }
 
-        let size = Extent3d {
+        let final_size = Extent3d {
             width: camera.image_size,
             height: camera.image_size,
             depth_or_array_layers: 1,
         };
+        let intermediate_size =
+            ((camera.image_size * camera.multisample) as f32 / camera.grid_size as f32) as u32;
+        let intermediate_size = match camera.multisample {
+            1 => final_size,
+            _ => Extent3d {
+                width: intermediate_size,
+                height: intermediate_size,
+                depth_or_array_layers: 1,
+            },
+        };
 
         let descriptor = TextureDescriptor {
             label: Some("imposter_texture"),
-            size,
+            size: final_size,
             mip_level_count: 1,
             sample_count: 1,
             dimension: TextureDimension::D2,
             format: TextureFormat::Rg32Uint,
             usage: TextureUsages::COPY_SRC
                 | TextureUsages::RENDER_ATTACHMENT
-                | TextureUsages::TEXTURE_BINDING,
+                | TextureUsages::TEXTURE_BINDING
+                | TextureUsages::STORAGE_BINDING,
             view_formats: &[],
         };
         let texture = texture_cache.get(&render_device, descriptor);
 
+        let (intermediate, blit_buffer) = match camera.multisample {
+            1 => (None, None),
+            _ => {
+                let descriptor = TextureDescriptor {
+                    label: Some("imposter_texture"),
+                    size: intermediate_size,
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: TextureDimension::D2,
+                    format: TextureFormat::Rg32Uint,
+                    usage: TextureUsages::COPY_SRC
+                        | TextureUsages::RENDER_ATTACHMENT
+                        | TextureUsages::TEXTURE_BINDING
+                        | TextureUsages::STORAGE_BINDING,
+                    view_formats: &[],
+                };
+                let mut buffer: UniformBuffer<BlitUniform> = UniformBuffer::from(BlitUniform {
+                    samples: camera.multisample,
+                });
+                buffer.write_buffer(&device, &queue);
+
+                (
+                    Some(texture_cache.get(&render_device, descriptor)),
+                    Some(buffer),
+                )
+            }
+        };
+
         let depth_descriptor = TextureDescriptor {
             label: Some("imposter_depth"),
-            size,
+            size: intermediate_size,
             mip_level_count: 1,
             sample_count: 1,
             dimension: TextureDimension::D2,
@@ -784,15 +932,41 @@ pub fn prepare_imposter_textures(
         };
         let depth_texture = texture_cache.get(&render_device, depth_descriptor);
 
-        commands.entity(entity).insert(ImposterTextures {
+        commands.entity(entity).insert(ImposterResources {
             output: ColorAttachment::new(texture, None, Some(LinearRgba::BLACK)),
+            intermediate: intermediate
+                .map(|i| ColorAttachment::new(i, None, Some(LinearRgba::BLACK))),
             depth: ViewDepthTexture::new(depth_texture, Some(0.0)),
             target: camera
                 .target
                 .as_ref()
                 .and_then(|target| images.get(target.id()))
                 .map(|image| image.texture.clone()),
+            blit_bindgroup: None,
+            blit_buffer,
         });
+    }
+}
+
+pub fn prepare_imposter_bindgroups(
+    mut q: Query<(&mut ImposterResources, &ExtractedImposterBakeCamera)>,
+    device: Res<RenderDevice>,
+    pipeline: Res<ImposterBlitPipeline>,
+) {
+    for (mut res, camera) in q.iter_mut() {
+        if camera.multisample > 1 {
+            let bindgroup = device.create_bind_group(
+                "imposter_blit_group",
+                &pipeline.layout,
+                &BindGroupEntries::sequential((
+                    &res.intermediate.as_ref().unwrap().texture.default_view,
+                    res.blit_buffer.as_ref().unwrap().binding().unwrap().clone(),
+                    &res.output.texture.default_view,
+                )),
+            );
+
+            res.blit_bindgroup = Some(bindgroup);
+        }
     }
 }
 
@@ -857,6 +1031,7 @@ pub fn queue_imposter_material_meshes<M: ImposterBakeMaterial>(
 
             let mut mesh_key = view_key | MeshPipelineKey::from_bits_retain(mesh.key_bits.bits());
 
+            // todo: investigate using A2C?
             mesh_key |= alpha_mode_pipeline_key(material.properties.alpha_mode, &Msaa::Off);
 
             // Even though we don't use the lightmap in the prepass, the
@@ -892,7 +1067,7 @@ pub fn queue_imposter_material_meshes<M: ImposterBakeMaterial>(
             match mesh_key
                 .intersection(MeshPipelineKey::BLEND_RESERVED_BITS | MeshPipelineKey::MAY_DISCARD)
             {
-                MeshPipelineKey::BLEND_OPAQUE => {
+                MeshPipelineKey::BLEND_OPAQUE | MeshPipelineKey::BLEND_ALPHA_TO_COVERAGE => {
                     opaque_phase.add(
                         Opaque3dBinKey {
                             draw_function: opaque_draw,
@@ -924,7 +1099,9 @@ pub fn queue_imposter_material_meshes<M: ImposterBakeMaterial>(
                             entity: *visible_entity,
                             draw_function: transparent_draw,
                             pipeline: pipeline_id,
-                            distance: 0.0, // this will be wrong for some view whatever we use...
+                            // since we share the mesh bindgroup this will be wrong for some views whatever we use.
+                            // todo: use oit?
+                            distance: 0.0,
                             batch_range: 0..1,
                             extra_index: PhaseItemExtraIndex::NONE,
                         },
@@ -941,7 +1118,7 @@ pub struct ImposterBakeNode;
 impl ViewNode for ImposterBakeNode {
     type ViewQuery = (
         &'static ExtractedImposterBakeCamera,
-        &'static ImposterTextures,
+        &'static ImposterResources,
     );
 
     fn run<'w>(
@@ -967,6 +1144,12 @@ impl ViewNode for ImposterBakeNode {
             return Ok(());
         };
 
+        let blit_pipeline = world.resource::<ImposterBlitPipeline>();
+        let pipeline_cache = world.resource::<PipelineCache>();
+        let Some(pipeline) = pipeline_cache.get_compute_pipeline(blit_pipeline.pipeline) else {
+            return Ok(());
+        };
+
         let actual = world.resource::<ImposterActualRenderCount>();
         *actual.0.lock().unwrap() = 0;
 
@@ -976,53 +1159,115 @@ impl ViewNode for ImposterBakeNode {
                     label: Some("imposter_command_encoder"),
                 });
 
-            // Render pass setup
-            let render_pass = command_encoder.begin_render_pass(&RenderPassDescriptor {
-                label: Some("imposter_bake"),
-                color_attachments: &[Some(textures.output.get_attachment())],
-                depth_stencil_attachment: Some(textures.depth.get_attachment(StoreOp::Store)),
-                timestamp_writes: None,
-                occlusion_query_set: None,
-            });
-            let mut render_pass = TrackedRenderPass::new(&render_device, render_pass);
-
-            // Opaque draws
-            // we use the batch from the dummy main view, which means opaque will be rendered potentially out of order
-            // TODO: see if it's worth binning for every individual view separately. since this is baking, probably not.
-            // if we use it for dynamic imposters in future there'd only be a single view being rendered anyway
-
             let tile_size = 1.0 / camera.grid_size as f32 * camera.image_size as f32;
-            // run once to check if all the items are ready and rendering
 
-            render_pass.set_viewport(0.0, 0.0, tile_size, tile_size, 0.0, 1.0);
-            opaque_phase.render(&mut render_pass, world, camera.subviews[0].2);
-            alphamask_phase.render(&mut render_pass, world, camera.subviews[0].2);
-            transparent_phase.render(&mut render_pass, world, camera.subviews[0].2);
+            let mut success = false;
+            if camera.multisample == 1 {
+                // use a single renderpass
+                // Render pass setup
+                let render_pass = command_encoder.begin_render_pass(&RenderPassDescriptor {
+                    label: Some("imposter_bake"),
+                    color_attachments: &[Some(textures.output.get_attachment())],
+                    depth_stencil_attachment: Some(textures.depth.get_attachment(StoreOp::Store)),
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                });
+                let mut render_pass = TrackedRenderPass::new(&render_device, render_pass);
 
-            let actual = *actual.0.lock().unwrap();
-            let success = actual == camera.expected_count;
+                // we use the batch from the dummy main view, which means items will be rendered potentially out of order
+                // TODO: see if it's worth binning for every individual view separately. since this is baking, probably not for opaque.
+                // if we use it for dynamic imposters in future there'd only be a single view being rendered anyway
 
-            if !success {
-                debug!("not ready: {}/{}", actual, camera.expected_count);
-            }
+                // run once to check if all the items are ready and rendering
 
-            if success {
-                for (x, y, view) in camera.subviews.iter().skip(1) {
-                    render_pass.set_viewport(
-                        *x as f32 * tile_size,
-                        *y as f32 * tile_size,
-                        tile_size,
-                        tile_size,
-                        0.0,
-                        1.0,
-                    );
+                render_pass.set_viewport(0.0, 0.0, tile_size.floor(), tile_size.floor(), 0.0, 1.0);
+                opaque_phase.render(&mut render_pass, world, camera.subviews[0].2);
+                alphamask_phase.render(&mut render_pass, world, camera.subviews[0].2);
+                transparent_phase.render(&mut render_pass, world, camera.subviews[0].2);
+
+                let actual = *actual.0.lock().unwrap();
+                success = actual == camera.expected_count;
+
+                if !success {
+                    debug!("not ready: {}/{}", actual, camera.expected_count);
+                }
+
+                if success {
+                    for (x, y, view) in camera.subviews.iter().skip(1) {
+                        render_pass.set_viewport(
+                            (*x as f32 * tile_size).floor(),
+                            (*y as f32 * tile_size).floor(),
+                            tile_size.floor(),
+                            tile_size.floor(),
+                            0.0,
+                            1.0,
+                        );
+                        opaque_phase.render(&mut render_pass, world, *view);
+                        alphamask_phase.render(&mut render_pass, world, *view);
+                        transparent_phase.render(&mut render_pass, world, *view);
+                    }
+                }
+
+                drop(render_pass);
+            } else {
+                // manual multisample resolve requires multiple passes
+
+                // store the attachments so we keep the initial clears
+                let color_attachments = [Some(
+                    textures.intermediate.as_ref().unwrap().get_attachment(),
+                )];
+                let depth_attachment = Some(textures.depth.get_attachment(StoreOp::Store));
+
+                for (x, y, view) in camera.subviews.iter() {
+                    // Render pass setup
+                    let render_pass = command_encoder.begin_render_pass(&RenderPassDescriptor {
+                        label: Some("imposter_bake"),
+                        color_attachments: &color_attachments,
+                        depth_stencil_attachment: depth_attachment.clone(),
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                    });
+                    let mut render_pass = TrackedRenderPass::new(&render_device, render_pass);
                     opaque_phase.render(&mut render_pass, world, *view);
                     alphamask_phase.render(&mut render_pass, world, *view);
                     transparent_phase.render(&mut render_pass, world, *view);
+
+                    if !success {
+                        let actual = *actual.0.lock().unwrap();
+                        success = actual == camera.expected_count;
+
+                        if !success {
+                            debug!("not ready: {}/{}", actual, camera.expected_count);
+                            break;
+                        }
+                    }
+
+                    drop(render_pass);
+
+                    // copy it
+                    let mut compute_pass =
+                        command_encoder.begin_compute_pass(&ComputePassDescriptor {
+                            label: Some("imposter_blit"),
+                            timestamp_writes: None,
+                        });
+
+                    compute_pass.set_pipeline(pipeline);
+                    compute_pass.set_bind_group(0, textures.blit_bindgroup.as_ref().unwrap(), &[]);
+                    compute_pass.set_push_constants(
+                        0,
+                        &((*x as f32 * tile_size).floor() as u32).to_le_bytes(),
+                    );
+                    compute_pass.set_push_constants(
+                        4,
+                        &((*y as f32 * tile_size).floor() as u32).to_le_bytes(),
+                    );
+                    compute_pass.dispatch_workgroups(
+                        (tile_size / 16.0).ceil() as u32,
+                        (tile_size / 16.0).ceil() as u32,
+                        1,
+                    );
                 }
             }
-
-            drop(render_pass);
 
             if success {
                 if let Some(callback) = camera.callback.as_ref() {

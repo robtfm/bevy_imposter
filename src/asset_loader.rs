@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use wgpu::{Extent3d, TextureFormat};
 
 use crate::{
-    render::{Imposter, ImposterData},
+    render::{Imposter, ImposterData, RENDER_MULTISAMPLE_FLAG, USE_SOURCE_UV_Y_FLAG},
     GridMode,
 };
 
@@ -23,7 +23,7 @@ pub struct ImposterLoader;
 
 #[derive(Serialize, Deserialize, Default)]
 pub enum ImposterVertexMode {
-    // should be used with a Rectangle mesh
+    // should be used with a Rectangle / Plane3d(normal: Vec3::Z) mesh
     #[default]
     Billboard,
     // can be used with any mesh
@@ -32,8 +32,12 @@ pub enum ImposterVertexMode {
 
 #[derive(Serialize, Deserialize, Default)]
 pub struct ImposterLoaderSettings {
+    // billboard / no billboard
     pub vertex_mode: ImposterVertexMode,
+    // smooth sample the material texture
     pub multisample: bool,
+    // take uv y coords from the source mesh
+    pub use_source_uv_y: bool,
 }
 
 impl AssetLoader for ImposterLoader {
@@ -95,7 +99,10 @@ impl AssetLoader for ImposterLoader {
                 ImposterVertexMode::Billboard => 4,
                 ImposterVertexMode::NoBillboard => 0,
             } + match load_settings.multisample {
-                true => 8,
+                true => RENDER_MULTISAMPLE_FLAG,
+                false => 0,
+            } + match load_settings.use_source_uv_y {
+                true => USE_SOURCE_UV_Y_FLAG,
                 false => 0,
             } + match mode {
                 "spherical" => GridMode::Spherical,
@@ -112,7 +119,6 @@ impl AssetLoader for ImposterLoader {
                     flags,
                 },
                 material: Some(image),
-                mode: crate::render::ImposterMode::Material,
             })
         })
     }

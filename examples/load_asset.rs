@@ -1,12 +1,19 @@
+// load and display a saved imposter
+
 use bevy::{asset::LoadState, prelude::*};
 use bevy_imposter::{asset_loader::ImposterLoaderSettings, render::Imposter, ImposterRenderPlugin};
+use camera_controller::{CameraController, CameraControllerPlugin};
+
+#[path = "helpers/camera_controller.rs"]
+mod camera_controller;
 
 pub fn main() {
     App::new()
         .add_plugins(DefaultPlugins)
         .add_plugins(ImposterRenderPlugin)
+        .add_plugins(CameraControllerPlugin)
         .add_systems(Startup, setup)
-        .add_systems(Update, (set_camera_pos, rotate))
+        .add_systems(Update, set_camera_pos)
         .run();
 }
 
@@ -23,17 +30,13 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>, mut meshes: Res
         std::process::exit(1);
     };
 
-    commands.spawn((
-        MaterialMeshBundle::<Imposter> {
-            mesh: meshes.add(Rectangle::default()),
-            material: asset_server
-                .load_with_settings::<_, ImposterLoaderSettings>(source, move |s| {
-                    s.multisample = multisample
-                }),
-            ..default()
-        },
-        Rotate,
-    ));
+    commands.spawn((MaterialMeshBundle::<Imposter> {
+        mesh: meshes.add(Plane3d::new(Vec3::Z, Vec2::splat(0.5)).mesh()),
+        material: asset_server.load_with_settings::<_, ImposterLoaderSettings>(source, move |s| {
+            s.multisample = multisample;
+        }),
+        ..default()
+    },));
 
     commands.spawn(Camera3dBundle {
         transform: Transform::from_translation(Vec3::ONE).looking_at(Vec3::ZERO, Vec3::Y),
@@ -44,9 +47,10 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>, mut meshes: Res
 }
 
 fn set_camera_pos(
+    mut commands: Commands,
     handles: Query<&Handle<Imposter>>,
     imposters: Res<Assets<Imposter>>,
-    mut cam: Query<&mut Transform, With<Camera>>,
+    mut cam: Query<(Entity, &mut Transform), With<Camera>>,
     asset_server: Res<AssetServer>,
     mut done: Local<bool>,
 ) {
@@ -58,25 +62,20 @@ fn set_camera_pos(
         if let Some(imposter) = imposters.get(handle.id()) {
             *done = true;
             let scale = imposter.data.center_and_scale.w;
-            for mut transform in cam.iter_mut() {
+            for (cam_ent, mut transform) in cam.iter_mut() {
                 *transform = Transform::from_translation(Vec3::X * scale * 4.0)
                     .looking_at(Vec3::ZERO, Vec3::Y);
+                commands.entity(cam_ent).insert(CameraController {
+                    walk_speed: scale,
+                    run_speed: scale * 3.0,
+                    ..default()
+                });
             }
-            info!("loaded (scale {scale})");
-            println!("{imposter:?}");
+            info!("loaded {imposter:?}");
         }
         if let LoadState::Failed(_) = asset_server.load_state(handle.id()) {
             error!("make sure to save an asset first with the `save_asset` example");
             std::process::exit(1);
         }
-    }
-}
-
-#[derive(Component)]
-pub struct Rotate;
-
-fn rotate(mut q: Query<&mut Transform, With<Rotate>>, time: Res<Time>) {
-    for mut t in q.iter_mut() {
-        t.rotation = Quat::from_rotation_y(time.elapsed_seconds() * 0.2);
     }
 }

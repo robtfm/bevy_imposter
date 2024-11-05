@@ -7,7 +7,7 @@
 #import boimp::shared::{
     ImposterData, 
     UnpackedMaterialProps,
-    GRID_MODE_BITS, 
+    GRID_MODE_MASK, 
     GRID_SPHERICAL, 
     GRID_HEMISPHERICAL, 
     GRID_HORIZONTAL, 
@@ -22,27 +22,67 @@
 var<uniform> imposter_data: ImposterData;
 
 @group(2) @binding(201) 
-#ifdef IMPOSTER_MATERIAL
-    var imposter_texture: texture_2d<u32>;
-#else
-    var imposter_texture: texture_2d<f32>;
-#endif
+var imposter_texture: texture_2d<u32>;
 
-@group(2) @binding(202) 
+@group(2) @binding(202)
 var imposter_sampler: sampler;
 
-fn oct_mode_uv_from_normal(dir: vec3<f32>) -> vec2<f32> {
-    let mode = imposter_data.flags & GRID_MODE_BITS;
-	if mode == GRID_HEMISPHERICAL || mode == GRID_HORIZONTAL {
-        var dir2: vec3<f32> = dir;
-        dir2.y = select(0.0, max(dir2.y, 0.0), mode == GRID_HEMISPHERICAL);
-        dir2 = normalize(dir2);
+struct SamplePositions {
+    tile_indices: array<vec2<u32>, 3>,
+    tile_weights: vec3<f32>,
+}
+
+fn oct_sample_weights(tile_uv: vec2<f32>) -> vec3<f32> {
+    let res = vec3<f32>(
+        1.0 - max(tile_uv.x, tile_uv.y),
+        abs(tile_uv.x - tile_uv.y),
+        min(tile_uv.x, tile_uv.y),
+    );
+    return res / (res.x + res.y + res.z);
+}
+
+fn oct_sample_positions(uv: vec2<f32>) -> SamplePositions {
+    var sample_positions: SamplePositions;
+
+    let grid_pos = uv * (f32(imposter_data.grid_size) - 1.0);
+    sample_positions.tile_indices[0] = clamp(vec2<u32>(grid_pos), vec2(0u), vec2(imposter_data.grid_size - 2));
+
+    let frac = clamp(grid_pos - vec2<f32>(sample_positions.tile_indices[0]), vec2(0.0), vec2(1.0));
+
+    sample_positions.tile_weights = oct_sample_weights(frac);
+    sample_positions.tile_indices[1] = sample_positions.tile_indices[0] + select(vec2(0u,1u), vec2(1u,0u), frac.x >= frac.y);
+    sample_positions.tile_indices[2] = sample_positions.tile_indices[0] + vec2(1u,1u);
+
+    return sample_positions;
+}
+
+fn sample_positions_from_camera_dir(dir: vec3<f32>) -> SamplePositions {
+    let mode = imposter_data.flags & GRID_MODE_MASK;
+    let grid_size = f32(imposter_data.grid_size);
+	if mode == GRID_HEMISPHERICAL {
+        // map direction to uv
+        let dir2 = normalize(max(dir, vec3(-1.0, 0.0, -1.0)));
         let octant: vec3<f32> = sign(dir2);
         let sum: f32 = dot(dir2, octant);
         let octahedron: vec3<f32> = dir2 / sum;
-        return (vec2<f32>(octahedron.x + octahedron.z, octahedron.z - octahedron.x) + 1.0) * 0.5;
+        let uv = (vec2<f32>(octahedron.x + octahedron.z, octahedron.z - octahedron.x) + 1.0) * 0.5;
+        
+        return oct_sample_positions(uv);
+    } else if mode == GRID_HORIZONTAL {
+        let dir2 = normalize(vec2(dir.x, dir.z));
+        let angle = 0.5 - atan2(dir2.x, -dir2.y) / 6.283185307;
+        let index = angle * f32(imposter_data.grid_size * imposter_data.grid_size);
+        let l_index = u32(index);
+        let r_index = l_index + 1u;
+        var sample_positions: SamplePositions;
+        sample_positions.tile_indices[0] = vec2(l_index % imposter_data.grid_size, (l_index / imposter_data.grid_size) % imposter_data.grid_size);
+        sample_positions.tile_indices[1] = vec2(r_index % imposter_data.grid_size, (r_index / imposter_data.grid_size) % imposter_data.grid_size);
+        sample_positions.tile_weights[1] = fract(index);
+        sample_positions.tile_weights[0] = 1.0 - sample_positions.tile_weights[1];
+        return sample_positions;
     } else {
-        return spherical_uv_from_normal(dir);
+        let uv = spherical_uv_from_normal(dir);
+        return oct_sample_positions(uv);
     }
 }
 
@@ -51,15 +91,30 @@ struct Basis {
     up: vec3<f32>,
 }
 
-fn oct_mode_normal_from_uv(uv: vec2<f32>, inv_rot: mat3x3<f32>) -> Basis {
-    let mode = imposter_data.flags & GRID_MODE_BITS;
+fn oct_mode_normal_from_uv(grid_index: vec2<u32>, inv_rot: mat3x3<f32>) -> Basis {
+    let mode = imposter_data.flags & GRID_MODE_MASK;
     var n: vec3<f32>;
-	if (mode == GRID_HEMISPHERICAL || mode == GRID_HORIZONTAL) {
+	if mode == GRID_HEMISPHERICAL {
+        let grid_count = f32(imposter_data.grid_size);
+        let tile_origin = vec2<f32>(grid_index) / grid_count;
+        let tile_size = 1.0 / grid_count;
+        let uv = tile_origin * grid_count / (grid_count - 1.0);
         var x = uv.x - uv.y;
         var z = -1.0 + uv.x + uv.y;
-        var y = select(0.0, 1.0 - abs(x) - abs(z), mode == GRID_HEMISPHERICAL);
+        var y = 1.0 - abs(x) - abs(z);
         n = normalize(vec3(x, y, z));
+    } else if mode == GRID_HORIZONTAL {
+        let index = grid_index.y * imposter_data.grid_size + grid_index.x;
+        let angle: f32 = 6.283185307 * f32(index) / f32(imposter_data.grid_size * imposter_data.grid_size);
+        let x: f32 = sin(angle);
+        let z: f32 = cos(angle);
+        n = vec3<f32>(x, 0.0, z);
     } else {
+        let grid_count = f32(imposter_data.grid_size);
+        let tile_origin = vec2<f32>(grid_index) / grid_count;
+        let tile_size = 1.0 / grid_count;
+        let uv = tile_origin * grid_count / (grid_count - 1.0);
+        let uv2 = uv * (f32(imposter_data.grid_size) - 1.0) * f32(imposter_data.grid_size);
         n = spherical_normal_from_uv(uv);
     }
 
@@ -71,68 +126,32 @@ fn oct_mode_normal_from_uv(uv: vec2<f32>, inv_rot: mat3x3<f32>) -> Basis {
     return basis;
 }
 
-fn grid_weights(coords: vec2<f32>) -> vec4<f32> {
-    let corner_tr = select(0.0, 1.0, coords.x > coords.y);
-    let corner_bl = 1.0 - corner_tr;
-    let corner = abs(coords.x - coords.y);
-    let res = vec4<f32>(
-        1.0 - max(coords.x, coords.y),
-        corner_tr * corner,
-        corner_bl * corner,
-        min(coords.x, coords.y),
-    );
-    return res / (res.x + res.y + res.w + res.z);
-}
+fn sample_uvs_unbounded(base_world_position: vec3<f32>, world_position: vec3<f32>, inv_rot: mat3x3<f32>, grid_index: vec2<u32>) -> vec2<f32> {
+    let basis = oct_mode_normal_from_uv(grid_index, inv_rot);
 
-fn sample_uvs_unbounded(base_world_position: vec3<f32>, world_position: vec3<f32>, inv_rot: mat3x3<f32>, grid_index: vec2<f32>) -> vec2<f32> {
-    let grid_count = f32(imposter_data.grid_size);
-    let tile_origin = grid_index / grid_count;
-    let tile_size = 1.0 / grid_count;
-    let basis = oct_mode_normal_from_uv(tile_origin * grid_count / (grid_count - 1.0), inv_rot);
     let sample_normal = basis.normal;
     let camera_world_position = position_view_to_world(vec3<f32>(0.0));
     let cam_to_fragment = normalize(world_position - camera_world_position);
     let distance = dot(base_world_position - camera_world_position, sample_normal) / dot(cam_to_fragment, sample_normal);
     let intersect = distance * cam_to_fragment + camera_world_position;
     // calculate uv using basis of the sample plane
-    let sample_r = normalize(cross(sample_normal, -basis.up));
-    let sample_u = normalize(cross(sample_r, sample_normal));
+    let sample_r = cross(sample_normal, -basis.up);
+    let sample_u = cross(sample_r, sample_normal);
     let v = intersect - base_world_position;
-    let x = dot(v, sample_r / (imposter_data.center_and_scale.w * 2.0));
-    let y = dot(v, sample_u / (imposter_data.center_and_scale.w * 2.0));
+    let x = dot(v, normalize(sample_r) / (imposter_data.center_and_scale.w * 2.0));
+    let y = dot(v, normalize(sample_u) / (imposter_data.center_and_scale.w * 2.0));
     let uv = vec2<f32>(x, y) + 0.5;
     return uv;
 }
 
-#ifdef IMPOSTER_IMAGE
-fn sample_uvs(base_world_position: vec3<f32>, world_position: vec3<f32>, inv_rot: mat3x3<f32>, grid_index: vec2<f32>) -> vec2<f32> {
-    let uv = sample_uvs_unbounded(base_world_position, world_position, inv_rot, grid_index);
+fn sample_tile_material(uv: vec2<f32>, grid_index: vec2<u32>) -> UnpackedMaterialProps {
     let grid_count = f32(imposter_data.grid_size);
-    let tile_origin = grid_index / grid_count;
-    let tile_size = 1.0 / grid_count;
-    return select(
-        vec2(tile_origin + tile_size * uv),
-        vec2(-1.0),
-        any(clamp(uv, vec2(0.0), vec2(1.0)) != uv)
-    );
-}
-
-fn sample_tile(base_world_position: vec3<f32>, world_position: vec3<f32>, inv_rot: mat3x3<f32>, grid_index: vec2<f32>) -> vec4<f32> {
-    let uv = sample_uvs(base_world_position, world_position, inv_rot, grid_index);
-    let sample_tl = textureSample(imposter_texture, imposter_sampler, uv);
-    return select(sample_tl, vec4(0.0), uv.x <= 0.0);
-}
-#endif
-
-#ifdef IMPOSTER_MATERIAL
-fn sample_tile_material(uv: vec2<f32>, grid_index: vec2<f32>) -> UnpackedMaterialProps {
-    let grid_count = f32(imposter_data.grid_size);
-    let tile_origin = grid_index / grid_count;
+    let tile_origin = vec2<f32>(grid_index) / grid_count;
     let tile_size = 1.0 / grid_count;
     let local_uv = tile_origin + tile_size * uv;
 
+    let oob = any(uv <= vec2(0.0)) || any(uv >= vec2(1.0));
     if (imposter_data.flags & MATERIAL_MULTISAMPLE) != 0u {
-        let oob = any(uv <= vec2(0.0)) || any(uv >= vec2(1.0));
         if oob {
             return unpack_props(vec2(0u));
         } else {
@@ -151,8 +170,6 @@ fn sample_tile_material(uv: vec2<f32>, grid_index: vec2<f32>) -> UnpackedMateria
     } else {
         let coords = vec2<u32>(local_uv * vec2<f32>(textureDimensions(imposter_texture)) + 0.5);
         let pixel = textureLoad(imposter_texture, coords, 0);
-        let oob = any(uv <= vec2(0.0)) || any(uv >= vec2(1.0));
         return unpack_props(select(pixel.xy, vec2(0u), oob));
     }
 }
-#endif

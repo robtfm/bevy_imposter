@@ -7,14 +7,16 @@
     mesh_view_bindings::view,
 };
 
-const GRID_MODE_BITS: u32 = 3;
+const GRID_MODE_MASK: u32 = 3;
 const GRID_SPHERICAL: u32 = 0;
 const GRID_HEMISPHERICAL: u32 = 1;
 const GRID_HORIZONTAL: u32= 2;
 
 const VERTEX_BILLBOARD: u32 = 4;
 
-const MATERIAL_MULTISAMPLE: u32 = 8;
+const USE_SOURCE_UV_Y: u32 = 8;
+
+const MATERIAL_MULTISAMPLE: u32 = 16;
 
 struct ImposterData {
     center_and_scale: vec4<f32>,
@@ -30,8 +32,16 @@ struct ImposterVertexOut {
     @location(3) inverse_rotation_0c: vec3<f32>,
     @location(4) inverse_rotation_1c: vec3<f32>,
     @location(5) inverse_rotation_2c: vec3<f32>,
-    @location(6) uv_tl_c: vec4<f32>,
-    @location(7) uv_br: vec2<f32>,
+    @location(6) uv_ab: vec4<f32>,
+    @location(7) uv_c: vec2<f32>,
+}
+
+struct UnpackedMaterialProps {
+    rgba: vec4<f32>,
+    normal: vec3<f32>,
+    roughness: f32,
+    metallic: f32,
+    flags: u32,
 }
 
 fn spherical_uv_from_normal(dir: vec3<f32>) -> vec2<f32> {
@@ -87,6 +97,13 @@ fn pack_rgba_roughness_metallic(albedo: vec4<f32>, roughness: f32, metallic: f32
         pack_bits(metallic, 24u, 8u);
 }
 
+fn pack_props(input: UnpackedMaterialProps) -> vec2<u32> {
+    return vec2<u32>(
+        pack_rgba_roughness_metallic(input.rgba, input.roughness, input.metallic),
+        pack_normal_and_flags(input.normal, input.flags)
+    );
+}
+
 fn pack_pbrinput(input: PbrInput) -> vec2<u32> {
     return vec2<u32>(
         pack_rgba_roughness_metallic(input.material.base_color, input.material.perceptual_roughness, input.material.metallic),
@@ -126,14 +143,6 @@ fn unpack_roughness(input: u32) -> f32 {
 
 fn unpack_metallic(input: u32) -> f32 {
     return clamp(unpack_bits(input, 24u, 8u), 0.1, 0.9);
-}
-
-struct UnpackedMaterialProps {
-    rgba: vec4<f32>,
-    normal: vec3<f32>,
-    roughness: f32,
-    metallic: f32,
-    flags: u32,
 }
 
 fn unpack_props(packed: vec2<u32>) -> UnpackedMaterialProps {
