@@ -1,21 +1,19 @@
+#import bevy_core_pipeline::fullscreen_vertex_shader::FullscreenVertexOutput;
 #import boimp::shared::{unpack_props, weighted_props, pack_props, UnpackedMaterialProps};
 
 struct BlitData {
     samples: u32,
 }
 
-@group(0) @binding(0) var source: texture_storage_2d<rg32uint, read>;
+@group(0) @binding(0) var source: texture_2d<u32>;
 @group(0) @binding(1) var<uniform> data: BlitData;
-@group(0) @binding(2) var output: texture_storage_2d<rg32uint, write>;
-var<push_constant> viewport: array<u32,2>;
-
-@compute
-@workgroup_size(16, 16, 1)
-fn blend_materials(
-    @builtin(global_invocation_id) gid: vec3<u32>,
-) {
-    let viewport_pixel = vec2<u32>(viewport[0], viewport[1]);
-    let target_pixel = gid.xy;
+@fragment
+fn blend_materials(in: FullscreenVertexOutput) -> @location(0) vec2<u32> {
+    let source_dims = textureDimensions(source);
+    let target_dims = source_dims / data.samples;
+    
+    let target_pixel = vec2<u32>(in.uv * vec2<f32>(target_dims));
+    let viewport_pixel = target_pixel * data.samples;
 
     var y_samples: array<UnpackedMaterialProps,8>;
     var y_end = data.samples;
@@ -24,7 +22,7 @@ fn blend_materials(
         var x_end = data.samples;
         var x_samples: array<UnpackedMaterialProps,8>;
         for (var x = 0u; x < data.samples; x++) {
-            let pixel = textureLoad(source, target_pixel * data.samples + vec2(x, y)).rg;
+            let pixel = textureLoad(source, target_pixel * data.samples + vec2(x, y), 0).rg;
             x_samples[x] = unpack_props(pixel);
         }
 
@@ -47,7 +45,6 @@ fn blend_materials(
         }
     }
 
-    textureStore(output, viewport_pixel + target_pixel, vec4(pack_props(y_samples[0]), 0u, 0u));
-    // textureStore(output, viewport_pixel + target_pixel, vec4(gid.x, gid.y, 0u, 0u));
+    return pack_props(y_samples[0]);
 }
 

@@ -101,12 +101,14 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
         .unwrap_or_else(|_| "models/FlightHelmet/FlightHelmet.gltf".to_string());
     let multisample = args.value_from_str("--multisample-source").unwrap_or(8);
 
-    let output = args.value_from_str("--output").unwrap_or("assets/boimps/output.boimp".to_owned());
+    let output = args
+        .value_from_str("--output")
+        .unwrap_or("assets/boimps/output.boimp".to_owned());
 
     let unused = args.finish();
     if !unused.is_empty() {
         println!("unrecognized arguments: {unused:?}");
-        println!("args: \n--mode [h]emispherical or [s]pherical\n--grid n (grid size, default 8)\n--image n (image size, default 1024)\n--source path (asset to load, default flight helmet)");
+        println!("args: \n--mode [h]emispherical or [s]pherical\n--grid n (grid size, default 8)\n--image n (image size, default 1024)\n--multisample-source <n> (average over a larger set of samples, default 8)--source path (asset to load, default flight helmet)");
         std::process::exit(1);
     }
 

@@ -11,6 +11,7 @@ use bevy::{
     asset::load_internal_asset,
     core_pipeline::{
         core_3d::{AlphaMask3d, Opaque3d, Opaque3dBinKey, Transparent3d},
+        fullscreen_vertex_shader::fullscreen_shader_vertex_state,
         prepass::OpaqueNoLightmap3dBinKey,
     },
     ecs::{entity::EntityHashSet, query::QueryFilter, system::lifetimeless::SRes},
@@ -38,13 +39,13 @@ use bevy::{
             ViewSortedRenderPhases,
         },
         render_resource::{
-            binding_types::{texture_storage_2d, uniform_buffer},
+            binding_types::{texture_2d, uniform_buffer},
             BindGroup, BindGroupEntries, BindGroupLayout, BindGroupLayoutEntries, Buffer,
-            BufferDescriptor, CachedComputePipelineId, CachedRenderPipelineId, ColorTargetState,
-            ColorWrites, CommandEncoderDescriptor, ComputePipelineDescriptor, Extent3d,
-            FragmentState, PipelineCache, RenderPassDescriptor, ShaderDefVal, ShaderRef,
-            ShaderType, SpecializedMeshPipeline, SpecializedMeshPipelines, StoreOp, Texture,
-            TextureDescriptor, TextureDimension, TextureFormat, TextureUsages, UniformBuffer,
+            BufferDescriptor, CachedRenderPipelineId, ColorTargetState, ColorWrites,
+            CommandEncoderDescriptor, Extent3d, FragmentState, PipelineCache, RenderPassDescriptor,
+            RenderPipelineDescriptor, ShaderDefVal, ShaderRef, ShaderType, SpecializedMeshPipeline,
+            SpecializedMeshPipelines, StoreOp, Texture, TextureDescriptor, TextureDimension,
+            TextureFormat, TextureUsages, UniformBuffer,
         },
         renderer::{RenderDevice, RenderQueue},
         texture::{ColorAttachment, GpuImage, ImageSampler, TextureCache, TextureFormatPixelInfo},
@@ -57,10 +58,7 @@ use bevy::{
     tasks::AsyncComputeTaskPool,
     utils::Parallel,
 };
-use wgpu::{
-    BufferUsages, ComputePassDescriptor, ImageCopyBuffer, ImageDataLayout, PushConstantRange,
-    ShaderStages, StorageTextureAccess,
-};
+use wgpu::{BufferUsages, ImageCopyBuffer, ImageDataLayout, ShaderStages};
 
 use crate::{
     asset_loader::write_asset,
@@ -802,7 +800,7 @@ pub struct BlitUniform {
 #[derive(Resource)]
 pub struct ImposterBlitPipeline {
     layout: BindGroupLayout,
-    pipeline: CachedComputePipelineId,
+    pipeline: CachedRenderPipelineId,
 }
 
 impl FromWorld for ImposterBlitPipeline {
@@ -813,25 +811,32 @@ impl FromWorld for ImposterBlitPipeline {
         let layout = device.create_bind_group_layout(
             "imposter_blit_layout",
             &BindGroupLayoutEntries::sequential(
-                ShaderStages::COMPUTE,
+                ShaderStages::FRAGMENT,
                 (
-                    texture_storage_2d(TextureFormat::Rg32Uint, StorageTextureAccess::ReadOnly),
+                    texture_2d(wgpu::TextureSampleType::Uint),
                     uniform_buffer::<BlitUniform>(false),
-                    texture_storage_2d(TextureFormat::Rg32Uint, StorageTextureAccess::WriteOnly),
                 ),
             ),
         );
 
-        let pipeline = pipeline_cache.queue_compute_pipeline(ComputePipelineDescriptor {
-            label: Some("imposter_blit_pipeline".into()),
+        let pipeline = pipeline_cache.queue_render_pipeline(RenderPipelineDescriptor {
+            label: Some("imposter_blit_render_pipeline".into()),
             layout: vec![layout.clone()],
-            push_constant_ranges: vec![PushConstantRange {
-                stages: ShaderStages::COMPUTE,
-                range: 0..8,
-            }],
-            shader: IMPOSTER_BLIT_HANDLE,
-            shader_defs: Vec::new(),
-            entry_point: "blend_materials".into(),
+            vertex: fullscreen_shader_vertex_state(),
+            fragment: Some(FragmentState {
+                shader: IMPOSTER_BLIT_HANDLE,
+                shader_defs: Vec::default(),
+                entry_point: "blend_materials".into(),
+                targets: vec![Some(ColorTargetState {
+                    format: TextureFormat::Rg32Uint,
+                    blend: None,
+                    write_mask: ColorWrites::ALL,
+                })],
+            }),
+            depth_stencil: None,
+            push_constant_ranges: Default::default(),
+            primitive: Default::default(),
+            multisample: Default::default(),
         });
 
         Self { layout, pipeline }
@@ -844,8 +849,8 @@ pub struct ImposterResources {
     pub intermediate: Option<ColorAttachment>,
     pub depth: ViewDepthTexture,
     pub target: Option<Texture>,
-    pub blit_bindgroup: Option<BindGroup>,
     pub blit_buffer: Option<UniformBuffer<BlitUniform>>,
+    pub blit_bindgroup: Option<BindGroup>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -945,8 +950,8 @@ pub fn prepare_imposter_textures(
                 .as_ref()
                 .and_then(|target| images.get(target.id()))
                 .map(|image| image.texture.clone()),
-            blit_bindgroup: None,
             blit_buffer,
+            blit_bindgroup: None,
         });
     }
 }
@@ -964,7 +969,6 @@ pub fn prepare_imposter_bindgroups(
                 &BindGroupEntries::sequential((
                     &res.intermediate.as_ref().unwrap().texture.default_view,
                     res.blit_buffer.as_ref().unwrap().binding().unwrap().clone(),
-                    &res.output.texture.default_view,
                 )),
             );
 
@@ -1149,7 +1153,7 @@ impl ViewNode for ImposterBakeNode {
 
         let blit_pipeline = world.resource::<ImposterBlitPipeline>();
         let pipeline_cache = world.resource::<PipelineCache>();
-        let Some(pipeline) = pipeline_cache.get_compute_pipeline(blit_pipeline.pipeline) else {
+        let Some(pipeline) = pipeline_cache.get_render_pipeline(blit_pipeline.pipeline) else {
             return Ok(());
         };
 
@@ -1248,27 +1252,26 @@ impl ViewNode for ImposterBakeNode {
                     drop(render_pass);
 
                     // copy it
-                    let mut compute_pass =
-                        command_encoder.begin_compute_pass(&ComputePassDescriptor {
-                            label: Some("imposter_blit"),
-                            timestamp_writes: None,
-                        });
+                    let mut pass = command_encoder.begin_render_pass(&RenderPassDescriptor {
+                        label: Some("imposter_blit"),
+                        color_attachments: &[Some(textures.output.get_attachment())],
+                        depth_stencil_attachment: None,
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                    });
 
-                    compute_pass.set_pipeline(pipeline);
-                    compute_pass.set_bind_group(0, textures.blit_bindgroup.as_ref().unwrap(), &[]);
-                    compute_pass.set_push_constants(
-                        0,
-                        &((*x as f32 * tile_size).floor() as u32).to_le_bytes(),
+                    pass.set_viewport(
+                        (*x as f32 * tile_size).floor(),
+                        (*y as f32 * tile_size).floor(),
+                        tile_size.floor(),
+                        tile_size.floor(),
+                        0.0,
+                        1.0,
                     );
-                    compute_pass.set_push_constants(
-                        4,
-                        &((*y as f32 * tile_size).floor() as u32).to_le_bytes(),
-                    );
-                    compute_pass.dispatch_workgroups(
-                        (tile_size / 16.0).ceil() as u32,
-                        (tile_size / 16.0).ceil() as u32,
-                        1,
-                    );
+
+                    pass.set_pipeline(pipeline);
+                    pass.set_bind_group(0, textures.blit_bindgroup.as_ref().unwrap(), &[]);
+                    pass.draw(0..3, 0..1);
                 }
             }
 
