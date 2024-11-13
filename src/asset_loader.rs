@@ -1,11 +1,9 @@
 use core::str;
 use std::{
     io::{Cursor, Read, Write},
-    mem::ManuallyDrop,
     path::PathBuf,
 };
 
-use ::exr::prelude::WritableImage;
 use anyhow::anyhow;
 use bevy::{
     asset::{AssetLoader, AsyncReadExt},
@@ -13,12 +11,7 @@ use bevy::{
     prelude::Image,
     render::render_asset::RenderAssetUsages,
 };
-use bytemuck::{cast_slice, Pod, Zeroable};
-use exr::prelude as exrp;
-use exr::{
-    image::pixel_vec::PixelVec,
-    prelude::{ReadChannels, ReadLayers, ReadSpecificChannel},
-};
+use image::{DynamicImage, ImageBuffer};
 use serde::{Deserialize, Serialize};
 use wgpu::{Extent3d, TextureFormat};
 
@@ -116,32 +109,15 @@ impl AssetLoader for ImposterLoader {
             let packed_tile_size = UVec2::new(packed_size_x.parse()?, packed_size_y.parse()?);
 
             let raw = zip
-                .by_name("texture.exr")?
+                .by_name("texture.png")?
                 .bytes()
                 .collect::<Result<Vec<_>, _>>()?;
-            let cursor = Cursor::new(raw);
+            let mut reader = image::ImageReader::new(std::io::Cursor::new(raw));
+            reader.set_format(image::ImageFormat::Png);
+            reader.no_limits();
+            let bytes = reader.decode()?.into_bytes();
 
-            let mut image = exrp::read()
-                .no_deep_data()
-                .largest_resolution_level()
-                .specific_channels()
-                .required("R")
-                .required("G")
-                .collect_pixels(
-                    PixelVec::<PodU32Pair>::constructor,
-                    |vec: &mut PixelVec<PodU32Pair>,
-                     pos: exr::math::Vec2<usize>,
-                     (r, g): (u32, u32)| vec.set_pixel(pos, PodU32Pair(r, g)),
-                )
-                .all_layers()
-                .all_attributes()
-                .from_buffered(cursor)?;
-
-            let data = std::mem::take(&mut image.layer_data[0].channel_data.pixels.pixels);
             let size: UVec2 = packed_tile_size * grid_size;
-
-            let raw_u8 = convert_vec(data);
-
             let image = Image::new(
                 Extent3d {
                     width: size.x,
@@ -149,7 +125,7 @@ impl AssetLoader for ImposterLoader {
                     depth_or_array_layers: 1,
                 },
                 wgpu::TextureDimension::D2,
-                raw_u8,
+                bytes,
                 TextureFormat::Rg32Uint,
                 RenderAssetUsages::RENDER_WORLD,
             );
@@ -203,7 +179,7 @@ pub fn pack_asset(grid_size: usize, image: &Image) -> (Image, UVec2, UVec2) {
         .take(pixels_per_tile)
         .collect::<Vec<_>>();
 
-    let data: &[u32] = cast_slice(&image.data);
+    let data: &[u32] = bytemuck::cast_slice(&image.data);
 
     for grid_x in 0..grid_size {
         for grid_y in 0..grid_size {
@@ -286,7 +262,6 @@ pub fn pack_asset(grid_size: usize, image: &Image) -> (Image, UVec2, UVec2) {
             depth_or_array_layers: 1,
         },
         wgpu::TextureDimension::D2,
-        // convert_vec(new_data),
         new_data_u8,
         wgpu::TextureFormat::Rg32Uint,
         Default::default(),
@@ -296,20 +271,6 @@ pub fn pack_asset(grid_size: usize, image: &Image) -> (Image, UVec2, UVec2) {
         UVec2::new(x_start as u32, y_start as u32),
         UVec2::new(x_count as u32, y_count as u32),
     )
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Zeroable, Default)]
-struct PodU32Pair(u32, u32);
-
-unsafe impl Pod for PodU32Pair {}
-
-impl exrp::recursive::IntoRecursive for PodU32Pair {
-    type Recursive = <(u32, u32) as exrp::recursive::IntoRecursive>::Recursive;
-
-    fn into_recursive(self) -> Self::Recursive {
-        <(u32, u32)>::into_recursive((self.0, self.1))
-    }
 }
 
 pub fn write_asset(
@@ -332,33 +293,11 @@ pub fn write_asset(
     let options =
         zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
 
-    let size = (image.width() as usize, image.height() as usize);
-    // let raw_u32_pairs: Vec<PodU32Pair> = convert_vec(image.data);
-    let raw_u32_pairs = image.data.chunks_exact(8).map(|chunk| (u32::from_le_bytes(chunk[0..4].try_into().unwrap()), u32::from_le_bytes(chunk[4..8].try_into().unwrap()))).collect::<Vec<_>>();
-
-    if raw_u32_pairs.len() == usize::MAX {
-        panic!()
-    }
-
-    let exr_image: exrp::Image<exrp::Layer<exrp::SpecificChannels<_, _>>> =
-        exrp::Image::from_layer(exrp::Layer::new(
-            size,
-            exrp::LayerAttributes::default(),
-            exrp::Encoding::SMALL_FAST_LOSSLESS,
-            exrp::SpecificChannels::new(
-                (
-                    exrp::ChannelDescription::named("R", exrp::SampleType::U32),
-                    exrp::ChannelDescription::named("G", exrp::SampleType::U32),
-                ),
-                PixelVec::new(size, raw_u32_pairs),
-            ),
-        ));
-
+    let dyn_image = DynamicImage::ImageRgba8(ImageBuffer::from_raw(image.width() * 2, image.height(), image.data).unwrap());
     let mut cursor = Cursor::new(Vec::default());
+    dyn_image.write_to(&mut cursor, image::ImageFormat::Png).unwrap();
 
-    // note: we use non_parallel as the pooled version seems to cause massive memory leaks
-    exr_image.write().non_parallel().to_buffered(&mut cursor)?;
-    zip.start_file("texture.exr", options)?;
+    zip.start_file("texture.png", options)?;
     zip.write_all(&cursor.into_inner())?;
 
     // write settings
@@ -377,22 +316,4 @@ pub fn write_asset(
     )?;
     zip.finish()?;
     Ok(())
-}
-
-pub fn convert_vec<T: Pod, U: Pod>(mut vec: Vec<T>) -> Vec<U> {
-    vec.shrink_to_fit();
-    let mut raw = ManuallyDrop::new(vec);
-    let (ptr, len, capacity) = (raw.as_mut_ptr(), raw.len(), raw.capacity());
-
-    let size_t = std::mem::size_of::<T>();
-    let size_u = std::mem::size_of::<U>();
-
-    let target_len = len * size_t / size_u;
-    let target_capacity = capacity * size_t / size_u;
-
-    if len * size_t != target_len * size_u || capacity * size_t != target_capacity * size_u {
-        panic!("invalid vec size for conversion");
-    }
-
-    unsafe { Vec::from_raw_parts(ptr as *mut U, target_len, target_capacity) }
 }
