@@ -9,8 +9,12 @@
 
 struct ImposterData {
     center_and_scale: vec4<f32>,
+    packed_offset: vec2<u32>,
+    packed_size: vec2<u32>,
     grid_size: u32,
+    base_tile_size: u32,
     flags: u32,
+    alpha: f32,
 }
 
 struct ImposterVertexOut {
@@ -145,10 +149,18 @@ fn unpack_props(packed: vec2<u32>) -> UnpackedMaterialProps {
 }
 
 fn weighted_props(a: UnpackedMaterialProps, b: UnpackedMaterialProps, weight_a: f32) -> UnpackedMaterialProps {
-    let wa = a.rgba.a * weight_a;
-    let wb = b.rgba.a * (1.0 - weight_a);
-
     var out: UnpackedMaterialProps;
+
+    let raw_wa = a.rgba.a * weight_a;
+    let raw_wb = b.rgba.a * (1.0 - weight_a);
+    let total_weight = raw_wa + raw_wb;
+    if total_weight == 0.0 {
+        return out;
+    }
+
+    let wa = raw_wa / total_weight;
+    let wb = raw_wb / total_weight;
+
     out.rgba = vec4(a.rgba.rgb * wa + b.rgba.rgb * wb, a.rgba.a * weight_a + b.rgba.a * (1.0 - weight_a));
     out.roughness = a.roughness * wa + b.roughness * wb;
     out.metallic = a.metallic * wa + b.metallic * wb;

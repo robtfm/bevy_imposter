@@ -17,6 +17,15 @@ impl GridMode {
             GridMode::Horizontal => 2,
         }
     }
+
+    pub fn from_flags(flags: u32) -> Self {
+        match flags & GRID_MASK {
+            0 => GridMode::Spherical,
+            1 => GridMode::Hemispherical,
+            2 => GridMode::Horizontal,
+            _ => unreachable!()
+        }
+    }
 }
 
 pub const GRID_MASK: u32 = 3;

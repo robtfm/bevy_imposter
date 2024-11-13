@@ -45,23 +45,35 @@ impl Plugin for ImposterRenderPlugin {
 #[derive(ShaderType, Clone, Copy, PartialEq, Debug)]
 pub struct ImposterData {
     pub center_and_scale: Vec4,
+    pub packed_tile_offset: UVec2,
+    pub packed_tile_size: UVec2,
     pub grid_size: u32,
+    pub base_tile_size: u32,
     pub flags: u32,
+    pub alpha: f32,
 }
 
 impl ImposterData {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         center: Vec3,
         scale: f32,
         grid_size: u32,
+        base_tile_size: u32,
+        packed_tile_offset: UVec2,
+        packed_tile_size: UVec2,
         mode: GridMode,
         billboard_vertices: bool,
         multisample: bool,
         use_mesh_uv_y: bool,
+        alpha: f32,
     ) -> Self {
         Self {
             center_and_scale: center.extend(scale),
             grid_size,
+            base_tile_size,
+            packed_tile_offset,
+            packed_tile_size,
             flags: mode.as_flags()
                 + if billboard_vertices {
                     VERTEX_BILLBOARD_FLAG
@@ -78,6 +90,7 @@ impl ImposterData {
                 } else {
                     0
                 },
+            alpha,
         }
     }
 }

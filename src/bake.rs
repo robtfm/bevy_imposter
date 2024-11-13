@@ -228,14 +228,21 @@ impl<B: Material, E: MaterialExtension + ImposterBakeMaterialExtension> Imposter
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BakeState {
+    Rendering,
+    RunningCallback,
+    Finished,
+}
+
 #[derive(Component, Clone)]
 pub struct ImposterBakeCamera {
     // area to capture
     pub radius: f32,
     // number of snapshots to pack
     pub grid_size: u32,
-    // total image size
-    pub image_size: u32,
+    // image size per tile
+    pub tile_size: u32,
     // number of samples to average over (power of 1,2,4,8,etc)
     pub multisample: u32,
     // camera angles to use for snapshots
@@ -246,10 +253,15 @@ pub struct ImposterBakeCamera {
     pub order: isize,
     // whether to snapshot every frame or stop after a single successful snapshot
     pub continuous: bool,
+    // whether to wait for all visible entities to be renderable (pipelines compiled, mesh/material data transferred to gpu)
+    pub wait_for_render: bool,
     // signal for completion (if not continuous) - written by the library
-    pub is_finished: bool,
+    pub state: BakeState,
     // optional callback for completion
     pub callback: Option<ImageCallback>,
+    // optional custom camera positions, for using the baking infrastructure to generate your own layouts
+    // needs to be combined with a custom frag shader
+    pub manual_camera_transforms: Option<Vec<GlobalTransform>>,
 }
 
 impl Default for ImposterBakeCamera {
@@ -257,14 +269,16 @@ impl Default for ImposterBakeCamera {
         Self {
             radius: 1.0,
             grid_size: 8,
-            image_size: 512,
+            tile_size: 64,
             multisample: 8,
             grid_mode: GridMode::Spherical,
             target: None,
             order: -99,
             continuous: false,
-            is_finished: false,
+            wait_for_render: true,
+            state: BakeState::Rendering,
             callback: None,
+            manual_camera_transforms: None,
         }
     }
 }
@@ -273,8 +287,8 @@ impl ImposterBakeCamera {
     // create a target image of the right format and size
     pub fn init_target(&mut self, images: &mut Assets<Image>) {
         let size = Extent3d {
-            width: self.image_size,
-            height: self.image_size,
+            width: self.tile_size * self.grid_size,
+            height: self.tile_size * self.grid_size,
             depth_or_array_layers: 1,
         };
 
@@ -306,9 +320,11 @@ impl ImposterBakeCamera {
 
     // Returns an async fn that can be set as the callback to save the asset once baked.
     // warning: uses the current camera state - changes after this call will not be reflected
+    // shrink_asset will pack the texture more tightly saving vram, but is slower.
     pub fn save_asset_callback(
         &self,
         path: impl AsRef<Path>,
+        shrink_asset: bool,
     ) -> impl FnOnce(bevy::prelude::Image) + Send + Sync + 'static {
         let mut path = path.as_ref().to_owned();
         if path.extension() != Some(OsStr::new("boimp")) {
@@ -316,10 +332,19 @@ impl ImposterBakeCamera {
         }
 
         let grid_size = self.grid_size;
+        let tile_size = self.tile_size;
         let radius = self.radius;
         let mode = self.grid_mode;
         move |image| {
-            if let Err(e) = write_asset(&path, radius, grid_size, mode, image) {
+            if let Err(e) = write_asset(
+                &path,
+                radius,
+                grid_size,
+                tile_size,
+                mode,
+                image,
+                shrink_asset,
+            ) {
                 error!("error writing imposter asset: {e}");
             } else {
                 info!("imposter saved");
@@ -330,13 +355,13 @@ impl ImposterBakeCamera {
 
 #[derive(Component)]
 pub struct ImposterBakeCompleteChannel {
-    sender: crossbeam_channel::Sender<()>,
-    receiver: Option<crossbeam_channel::Receiver<()>>,
+    sender: crossbeam_channel::Sender<BakeState>,
+    receiver: Option<crossbeam_channel::Receiver<BakeState>>,
 }
 
 impl Default for ImposterBakeCompleteChannel {
     fn default() -> Self {
-        let (sender, receiver) = crossbeam_channel::bounded(5); // make sure we don't block rendering
+        let (sender, receiver) = crossbeam_channel::bounded(2); // make sure we don't block rendering
         Self {
             sender,
             receiver: Some(receiver),
@@ -458,9 +483,10 @@ pub fn check_imposter_visibility<QF>(
     }
 }
 
+#[allow(clippy::type_complexity)]
 fn count_expected_imposter_materials<M: ImposterBakeMaterial>(
     mut q: Query<(&mut ImposterExpectedRenderCount, &VisibleEntities), With<ImposterBakeCamera>>,
-    materials: Query<(), With<Handle<M>>>,
+    materials: Query<(), (With<Handle<M>>, With<Handle<Mesh>>)>,
 ) {
     for (mut count, visible_entities) in q.iter_mut() {
         let material_count = visible_entities
@@ -479,12 +505,13 @@ fn count_expected_imposter_materials<M: ImposterBakeMaterial>(
 #[derive(Component)]
 pub struct ExtractedImposterBakeCamera {
     pub grid_size: u32,
-    pub image_size: u32,
+    pub tile_size: u32,
     pub multisample: u32,
     pub target: Option<Handle<Image>>,
     pub subviews: Vec<(u32, u32, Entity)>,
     pub expected_count: usize,
-    pub channel: crossbeam_channel::Sender<()>,
+    pub wait_for_render: bool,
+    pub channel: crossbeam_channel::Sender<BakeState>,
     pub callback: Option<ImageCallback>,
 }
 
@@ -565,16 +592,14 @@ fn check_finished_cameras(
     )>,
 ) {
     for (ent, mut cam, receiver) in q.iter_mut() {
-        while receiver
-            .receiver
-            .as_ref()
-            .and_then(|r| r.try_recv().ok())
-            .is_some()
-        {
+        while let Some(new_state) = receiver.receiver.as_ref().and_then(|r| r.try_recv().ok()) {
             if !cam.continuous {
-                debug!("recv success");
-                cam.is_finished = true;
-                commands.entity(ent).remove::<ImposterBakeCompleteChannel>();
+                debug!("recv state: {new_state:?}");
+                cam.state = new_state;
+
+                if new_state == BakeState::Finished {
+                    commands.entity(ent).remove::<ImposterBakeCompleteChannel>();
+                }
             }
         }
     }
@@ -584,8 +609,18 @@ pub type ImageCallback = Arc<Mutex<Option<Box<dyn FnOnce(Image) + Send + Sync + 
 
 #[derive(Resource)]
 pub struct ImpostersBaked {
-    sender: crossbeam_channel::Sender<(u32, ImageCallback, Buffer)>,
-    receiver: crossbeam_channel::Receiver<(u32, ImageCallback, Buffer)>,
+    sender: crossbeam_channel::Sender<(
+        u32,
+        ImageCallback,
+        crossbeam_channel::Sender<BakeState>,
+        Buffer,
+    )>,
+    receiver: crossbeam_channel::Receiver<(
+        u32,
+        ImageCallback,
+        crossbeam_channel::Sender<BakeState>,
+        Buffer,
+    )>,
 }
 
 impl Default for ImpostersBaked {
@@ -615,7 +650,9 @@ pub fn extract_imposter_cameras(
     let mut entities = EntityHashSet::default();
 
     for (entity, camera, channel, expected_count, gt, visible_entities) in cameras.iter() {
-        if camera.is_finished || !channel.receiver.as_ref().map_or(true, |r| r.is_empty()) {
+        if camera.state != BakeState::Rendering
+            || !channel.receiver.as_ref().map_or(true, |r| r.is_empty())
+        {
             continue;
         }
         debug!("extract");
@@ -638,19 +675,32 @@ pub fn extract_imposter_cameras(
         let clip_from_view = projection.get_clip_from_view();
         for y in 0..camera.grid_size {
             for x in 0..camera.grid_size {
-                let (normal, up) =
-                    normal_from_grid(UVec2::new(x, y), camera.grid_mode, camera.grid_size);
-                let camera_transform = GlobalTransform::from(
-                    Transform::from_translation(center + normal * camera.radius)
-                        .looking_at(center, up),
-                );
+                let camera_transform =
+                    if let Some(camera_transforms) = camera.manual_camera_transforms.as_ref() {
+                        camera_transforms
+                            .get((y * camera.grid_size + x) as usize)
+                            .expect("not enough manual camera transforms")
+                            .clone()
+                    } else {
+                        let (normal, up) =
+                            normal_from_grid(UVec2::new(x, y), camera.grid_mode, camera.grid_size);
+                        GlobalTransform::from(
+                            Transform::from_translation(center + normal * camera.radius)
+                                .looking_at(center, up),
+                        )
+                    };
 
                 let view = ExtractedView {
                     clip_from_view,
                     world_from_view: camera_transform,
                     clip_from_world: None,
                     hdr: false,
-                    viewport: UVec4::new(0, 0, camera.image_size, camera.image_size),
+                    viewport: UVec4::new(
+                        0,
+                        0,
+                        camera.tile_size * camera.grid_size,
+                        camera.tile_size * camera.grid_size,
+                    ),
                     color_grading: ColorGrading::default(),
                 };
 
@@ -663,18 +713,19 @@ pub fn extract_imposter_cameras(
         commands.get_or_spawn(entity).insert((
             ExtractedImposterBakeCamera {
                 grid_size: camera.grid_size,
-                image_size: camera.image_size,
+                tile_size: camera.tile_size,
                 target: camera.target.clone(),
                 multisample: camera.multisample,
                 subviews,
                 expected_count: expected_count.0,
+                wait_for_render: camera.wait_for_render,
                 channel: channel.sender.clone(),
                 callback: camera.callback.clone(),
             },
             ExtractedCamera {
                 target: None,
-                physical_viewport_size: Some(UVec2::splat(camera.image_size)),
-                physical_target_size: Some(UVec2::splat(camera.image_size)),
+                physical_viewport_size: Some(UVec2::splat(camera.tile_size * camera.grid_size)),
+                physical_target_size: Some(UVec2::splat(camera.tile_size * camera.grid_size)),
                 viewport: None,
                 render_graph: ImposterBakeGraph.intern(),
                 order: camera.order,
@@ -870,12 +921,11 @@ pub fn prepare_imposter_textures(
         }
 
         let final_size = Extent3d {
-            width: camera.image_size,
-            height: camera.image_size,
+            width: camera.tile_size * camera.grid_size,
+            height: camera.tile_size * camera.grid_size,
             depth_or_array_layers: 1,
         };
-        let intermediate_size =
-            ((camera.image_size * camera.multisample) as f32 / camera.grid_size as f32) as u32;
+        let intermediate_size = camera.tile_size * camera.multisample;
         let intermediate_size = match camera.multisample {
             1 => final_size,
             _ => Extent3d {
@@ -1158,17 +1208,21 @@ impl ViewNode for ImposterBakeNode {
         };
 
         let actual = world.resource::<ImposterActualRenderCount>();
-        *actual.0.lock().unwrap() = 0;
 
         render_context.add_command_buffer_generation_task(move |render_device| {
+            // we are counting on a shared resource, so have to take a unique lock within the task to ensure it
+            // doesn't fail when multiple bake cameras exist.
+            // probably a better way to do this
+            let _parallel_lock = actual.1.lock().unwrap();
+            *actual.0.lock().unwrap() = 0;
+
             let mut command_encoder =
                 render_device.create_command_encoder(&CommandEncoderDescriptor {
                     label: Some("imposter_command_encoder"),
                 });
 
-            let tile_size = 1.0 / camera.grid_size as f32 * camera.image_size as f32;
-
             let mut success = false;
+
             if camera.multisample == 1 {
                 // use a single renderpass
                 // Render pass setup
@@ -1187,7 +1241,14 @@ impl ViewNode for ImposterBakeNode {
 
                 // run once to check if all the items are ready and rendering
 
-                render_pass.set_viewport(0.0, 0.0, tile_size.floor(), tile_size.floor(), 0.0, 1.0);
+                render_pass.set_viewport(
+                    0.0,
+                    0.0,
+                    camera.tile_size as f32,
+                    camera.tile_size as f32,
+                    0.0,
+                    1.0,
+                );
                 opaque_phase.render(&mut render_pass, world, camera.subviews[0].2);
                 alphamask_phase.render(&mut render_pass, world, camera.subviews[0].2);
                 transparent_phase.render(&mut render_pass, world, camera.subviews[0].2);
@@ -1196,16 +1257,16 @@ impl ViewNode for ImposterBakeNode {
                 success = actual == camera.expected_count;
 
                 if !success {
-                    debug!("not ready: {}/{}", actual, camera.expected_count);
+                    warn!("not ready: {}/{}", actual, camera.expected_count);
                 }
 
-                if success {
+                if success || !camera.wait_for_render {
                     for (x, y, view) in camera.subviews.iter().skip(1) {
                         render_pass.set_viewport(
-                            (*x as f32 * tile_size).floor(),
-                            (*y as f32 * tile_size).floor(),
-                            tile_size.floor(),
-                            tile_size.floor(),
+                            (*x * camera.tile_size) as f32,
+                            (*y * camera.tile_size) as f32,
+                            camera.tile_size as f32,
+                            camera.tile_size as f32,
                             0.0,
                             1.0,
                         );
@@ -1225,6 +1286,7 @@ impl ViewNode for ImposterBakeNode {
                 )];
                 let depth_attachment = Some(textures.depth.get_attachment(StoreOp::Store));
 
+                let mut is_first = true;
                 for (x, y, view) in camera.subviews.iter() {
                     // Render pass setup
                     let render_pass = command_encoder.begin_render_pass(&RenderPassDescriptor {
@@ -1239,13 +1301,16 @@ impl ViewNode for ImposterBakeNode {
                     alphamask_phase.render(&mut render_pass, world, *view);
                     transparent_phase.render(&mut render_pass, world, *view);
 
-                    if !success {
+                    if is_first {
+                        is_first = false;
                         let actual = *actual.0.lock().unwrap();
                         success = actual == camera.expected_count;
 
                         if !success {
-                            debug!("not ready: {}/{}", actual, camera.expected_count);
-                            break;
+                            warn!("not ready: {}/{}", actual, camera.expected_count);
+                            if camera.wait_for_render {
+                                break;
+                            }
                         }
                     }
 
@@ -1261,10 +1326,10 @@ impl ViewNode for ImposterBakeNode {
                     });
 
                     pass.set_viewport(
-                        (*x as f32 * tile_size).floor(),
-                        (*y as f32 * tile_size).floor(),
-                        tile_size.floor(),
-                        tile_size.floor(),
+                        (*x * camera.tile_size) as f32,
+                        (*y * camera.tile_size) as f32,
+                        camera.tile_size as f32,
+                        camera.tile_size as f32,
                         0.0,
                         1.0,
                     );
@@ -1275,7 +1340,11 @@ impl ViewNode for ImposterBakeNode {
                 }
             }
 
-            if success {
+            if success || !camera.wait_for_render {
+                if !success {
+                    warn!("imposting with some missing items");
+                }
+
                 if let Some(callback) = camera.callback.as_ref() {
                     debug!("send callback buffer");
                     let render_device = world.resource::<RenderDevice>();
@@ -1283,8 +1352,8 @@ impl ViewNode for ImposterBakeNode {
                     let buffer = render_device.create_buffer(&BufferDescriptor {
                         label: Some("imposter transfer buffer"),
                         size: get_aligned_size(
-                            camera.image_size,
-                            camera.image_size,
+                            camera.tile_size * camera.grid_size,
+                            camera.tile_size * camera.grid_size,
                             TextureFormat::Rg32Uint.pixel_size() as u32,
                         ) as u64,
                         usage: BufferUsages::MAP_READ | BufferUsages::COPY_DST,
@@ -1297,7 +1366,7 @@ impl ViewNode for ImposterBakeNode {
                             buffer: &buffer,
                             layout: ImageDataLayout {
                                 bytes_per_row: Some(get_aligned_size(
-                                    camera.image_size,
+                                    camera.tile_size * camera.grid_size,
                                     1,
                                     TextureFormat::Rg32Uint.pixel_size() as u32,
                                 )),
@@ -1305,17 +1374,30 @@ impl ViewNode for ImposterBakeNode {
                             },
                         },
                         Extent3d {
-                            width: camera.image_size,
-                            height: camera.image_size,
+                            width: camera.tile_size * camera.grid_size,
+                            height: camera.tile_size * camera.grid_size,
                             depth_or_array_layers: 1,
                         },
                     );
 
+                    // report back
+                    debug!("send state::callback");
+                    if let Err(e) = camera.channel.send(BakeState::RunningCallback) {
+                        warn!("error sending state: {e}");
+                    }
+
                     let _ = world.resource::<ImpostersBaked>().sender.send((
-                        camera.image_size,
+                        camera.tile_size * camera.grid_size,
                         callback.clone(),
+                        camera.channel.clone(),
                         buffer,
                     ));
+                } else {
+                    // report back
+                    debug!("no callback, send success");
+                    if let Err(e) = camera.channel.send(BakeState::Finished) {
+                        warn!("error sending state: {e}");
+                    }
                 }
 
                 // copy it to the output
@@ -1324,16 +1406,12 @@ impl ViewNode for ImposterBakeNode {
                         textures.output.texture.texture.as_image_copy(),
                         target.as_image_copy(),
                         Extent3d {
-                            width: camera.image_size,
-                            height: camera.image_size,
+                            width: camera.tile_size * camera.grid_size,
+                            height: camera.tile_size * camera.grid_size,
                             depth_or_array_layers: 1,
                         },
                     );
                 }
-
-                // report back
-                debug!("send success");
-                let _ = camera.channel.send(());
             }
 
             command_encoder.finish()
@@ -1344,7 +1422,7 @@ impl ViewNode for ImposterBakeNode {
 }
 
 pub fn copy_back(baked: Res<ImpostersBaked>) {
-    while let Ok((image_size, callback, buffer)) = baked.receiver.try_recv() {
+    while let Ok((image_size, callback, success_channel, buffer)) = baked.receiver.try_recv() {
         debug!("begin async process");
 
         let Some(callback) = callback.lock().unwrap().take() else {
@@ -1401,7 +1479,12 @@ pub fn copy_back(baked: Res<ImpostersBaked>) {
             );
 
             debug!("callback");
-            (callback)(image)
+            (callback)(image);
+
+            debug!("post-callback send success");
+            if let Err(e) = success_channel.send(BakeState::Finished) {
+                warn!("error sending state: {e}");
+            }
         };
 
         AsyncComputeTaskPool::get().spawn(finish).detach();
@@ -1420,7 +1503,7 @@ pub fn get_aligned_size(width: u32, height: u32, pixel_size: u32) -> u32 {
 pub struct ImposterExpectedRenderCount(usize);
 
 #[derive(Resource, Default)]
-pub struct ImposterActualRenderCount(Arc<Mutex<usize>>);
+pub struct ImposterActualRenderCount(Arc<Mutex<usize>>, Arc<Mutex<()>>);
 
 pub struct CountRenderCommand;
 impl<P: PhaseItem> RenderCommand<P> for CountRenderCommand {

@@ -5,14 +5,7 @@
 use std::f32::consts::{FRAC_PI_4, PI};
 
 use bevy::{
-    animation::AnimationTarget,
-    asset::LoadState,
-    diagnostic::{FrameTimeDiagnosticsPlugin, LogDiagnosticsPlugin},
-    ecs::entity::EntityHashMap,
-    prelude::*,
-    render::primitives::{Aabb, Sphere},
-    scene::InstanceId,
-    utils::hashbrown::HashMap,
+    animation::AnimationTarget, asset::LoadState, diagnostic::{FrameTimeDiagnosticsPlugin, LogDiagnosticsPlugin}, ecs::entity::EntityHashMap, math::FloatOrd, prelude::*, render::primitives::{Aabb, Sphere}, scene::InstanceId, utils::hashbrown::HashMap
 };
 use boimp::{
     GridMode, Imposter, ImposterBakeBundle, ImposterBakeCamera, ImposterBakePlugin, ImposterData,
@@ -28,7 +21,7 @@ mod camera_controller;
 struct BakeSettings {
     mode: GridMode,
     grid_size: u32,
-    image_size: u32,
+    tile_size: u32,
     count: usize,
     multisample_source: u32,
     multisample_target: bool,
@@ -114,7 +107,7 @@ impl SceneHandle {
 fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
     let mut args = pico_args::Arguments::from_env();
     let grid_size = args.value_from_str("--grid").unwrap_or(15);
-    let image_size = args.value_from_str("--image").unwrap_or(1024);
+    let tile_size = args.value_from_str("--tile").unwrap_or(1024);
     let mode = match args
         .value_from_str("--mode")
         .unwrap_or("h".to_owned())
@@ -144,7 +137,7 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
         std::process::exit(1);
     }
 
-    info!("settings: grid: {grid_size}, image: {image_size}, mode: {mode:?}");
+    info!("settings: grid: {grid_size}, tile: {tile_size}, mode: {mode:?}");
     info!("Loading {}", scene_path);
     let (file_path, scene_index) = parse_scene(scene_path);
 
@@ -152,7 +145,7 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
     commands.insert_resource(BakeSettings {
         mode,
         grid_size,
-        image_size,
+        tile_size,
         count,
         multisample_source,
         multisample_target,
@@ -360,12 +353,14 @@ fn setup_scene_after_load(
             }));
         }
 
-        let aabb = Aabb::enclosing(points).unwrap();
-        let size = aabb.half_extents.length() * 2.0;
+        let aabb = Aabb::enclosing(&points).unwrap();
+        let radius = points.iter().map(|p| FloatOrd((*p - Vec3::from(aabb.center)).length())).max().unwrap().0;
+        let size = radius * 2.0;
         let sphere = Sphere {
             center: aabb.center,
-            radius: aabb.half_extents.length(),
+            radius,
         };
+        
         info!("sphere: {:?}", sphere);
         scene_handle.sphere = sphere;
 
@@ -435,7 +430,7 @@ fn impost(
         let mut camera = ImposterBakeCamera {
             radius: scene_handle.sphere.radius,
             grid_size: settings.grid_size,
-            image_size: settings.image_size,
+            tile_size: settings.tile_size,
             grid_mode: settings.mode,
             continuous: true,
             multisample: settings.multisample_source,
@@ -485,10 +480,14 @@ fn impost(
                         Vec3::ZERO,
                         scene_handle.sphere.radius,
                         settings.grid_size,
+                        settings.tile_size,
+                        UVec2::ZERO,
+                        UVec2::splat(settings.tile_size),
                         settings.mode,
                         true,
                         settings.multisample_target,
                         false,
+                        1.0,
                     ),
                     material: Some(camera.target.clone().unwrap()),
                 }),

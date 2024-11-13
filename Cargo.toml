@@ -9,6 +9,9 @@ bevy = { git = "https://github.com/robtfm/bevy", branch = "0.14.2-plus-16188" }
 wgpu = "0.20"
 crossbeam-channel = "0.5.13"
 async-channel = "2.2.0"
+image = "0.25.2"
+bytemuck = "1.7"
+exr = "1.73"
 
 # asset loader
 zip = "2"

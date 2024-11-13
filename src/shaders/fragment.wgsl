@@ -1,7 +1,7 @@
 #import bevy_pbr::{
     forward_io::FragmentOutput,
     pbr_functions::{apply_pbr_lighting, main_pass_post_lighting_processing},
-    pbr_types::STANDARD_MATERIAL_FLAGS_UNLIT_BIT,
+    pbr_types::{STANDARD_MATERIAL_FLAGS_UNLIT_BIT, STANDARD_MATERIAL_FLAGS_FOG_ENABLED_BIT}
 }
 
 #import boimp::shared::{ImposterVertexOut, unpack_pbrinput, weighted_props};
@@ -19,23 +19,37 @@ fn fragment(in: ImposterVertexOut) -> FragmentOutput {
         in.inverse_rotation_2c,
     );
 
-    let props_a = sample_tile_material(in.uv_ab.xy, samples.tile_indices[0]);
-    let props_b = sample_tile_material(in.uv_ab.zw, samples.tile_indices[1]);
-    let props_c = sample_tile_material(in.uv_c, samples.tile_indices[2]);
+    let props_a = sample_tile_material(in.uv_ab.xy, samples.tile_indices[0], vec2(0.0));
+    let props_b = sample_tile_material(in.uv_ab.zw, samples.tile_indices[1], vec2(0.0));
+#ifndef GRID_HORIZONTAL
+    let props_c = sample_tile_material(in.uv_c, samples.tile_indices[2], vec2(0.0));
+#endif
 
     let weights = samples.tile_weights;
     let props_ab = weighted_props(props_a, props_b, weights.x / (weights.x + weights.y));
+#ifndef GRID_HORIZONTAL
     let props_final = weighted_props(props_ab, props_c, (weights.x + weights.y) / (weights.x + weights.y + weights.z));
+#else 
+    let props_final = props_ab;
+#endif
+
+    if props_final.rgba.a < 0.01 {
+        discard;
+    }
 
     var pbr_input = unpack_pbrinput(props_final, in.position);    
     pbr_input.N = inv_rot * normalize(pbr_input.N);
     pbr_input.world_normal = pbr_input.N;
+
+    pbr_input.material.base_color.a *= imposter_data.alpha;
 
     if (pbr_input.material.flags & STANDARD_MATERIAL_FLAGS_UNLIT_BIT) == 0u {
         out.color = apply_pbr_lighting(pbr_input);
     } else {
         out.color = pbr_input.material.base_color;
     }
+
+    pbr_input.material.flags |= STANDARD_MATERIAL_FLAGS_FOG_ENABLED_BIT;
 
     out.color = main_pass_post_lighting_processing(pbr_input, out.color);
 
