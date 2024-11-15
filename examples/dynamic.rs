@@ -5,11 +5,19 @@
 use std::f32::consts::{FRAC_PI_4, PI};
 
 use bevy::{
-    animation::AnimationTarget, asset::LoadState, diagnostic::{FrameTimeDiagnosticsPlugin, LogDiagnosticsPlugin}, ecs::entity::EntityHashMap, math::FloatOrd, prelude::*, render::primitives::{Aabb, Sphere}, scene::InstanceId, utils::hashbrown::HashMap
+    animation::AnimationTarget,
+    asset::LoadState,
+    diagnostic::{FrameTimeDiagnosticsPlugin, LogDiagnosticsPlugin},
+    ecs::entity::EntityHashMap,
+    math::FloatOrd,
+    prelude::*,
+    render::primitives::{Aabb, Sphere},
+    scene::InstanceId,
+    utils::hashbrown::HashMap,
 };
 use boimp::{
-    GridMode, Imposter, ImposterBakeBundle, ImposterBakeCamera, ImposterBakePlugin, ImposterData,
-    ImposterRenderPlugin,
+    render::DummyIndicesImage, GridMode, Imposter, ImposterBakeBundle, ImposterBakeCamera,
+    ImposterBakePlugin, ImposterData, ImposterRenderPlugin,
 };
 use camera_controller::{CameraController, CameraControllerPlugin};
 use rand::{thread_rng, Rng};
@@ -107,7 +115,7 @@ impl SceneHandle {
 fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
     let mut args = pico_args::Arguments::from_env();
     let grid_size = args.value_from_str("--grid").unwrap_or(15);
-    let tile_size = args.value_from_str("--tile").unwrap_or(1024);
+    let tile_size = args.value_from_str("--tile").unwrap_or(128);
     let mode = match args
         .value_from_str("--mode")
         .unwrap_or("h".to_owned())
@@ -354,13 +362,18 @@ fn setup_scene_after_load(
         }
 
         let aabb = Aabb::enclosing(&points).unwrap();
-        let radius = points.iter().map(|p| FloatOrd((*p - Vec3::from(aabb.center)).length())).max().unwrap().0;
+        let radius = points
+            .iter()
+            .map(|p| FloatOrd((*p - Vec3::from(aabb.center)).length()))
+            .max()
+            .unwrap()
+            .0;
         let size = radius * 2.0;
         let sphere = Sphere {
             center: aabb.center,
             radius,
         };
-        
+
         info!("sphere: {:?}", sphere);
         scene_handle.sphere = sphere;
 
@@ -417,6 +430,7 @@ fn impost(
     mut materials: ResMut<Assets<Imposter>>,
     cams: Query<Entity, With<ImposterBakeCamera>>,
     settings: Res<BakeSettings>,
+    dummy_indices: Res<DummyIndicesImage>,
 ) {
     if k.just_pressed(KeyCode::KeyO) {
         for entity in cams.iter() {
@@ -487,9 +501,11 @@ fn impost(
                         true,
                         settings.multisample_target,
                         false,
+                        false,
                         1.0,
                     ),
-                    material: Some(camera.target.clone().unwrap()),
+                    pixels: camera.target.clone().unwrap(),
+                    indices: dummy_indices.0.clone(),
                 }),
                 ..Default::default()
             },));

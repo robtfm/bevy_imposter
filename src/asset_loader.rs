@@ -1,5 +1,6 @@
 use core::str;
 use std::{
+    collections::{BTreeMap, BTreeSet},
     io::{Cursor, Read, Write},
     path::PathBuf,
 };
@@ -7,6 +8,7 @@ use std::{
 use anyhow::anyhow;
 use bevy::{
     asset::{AssetLoader, AsyncReadExt},
+    log::debug,
     math::{UVec2, Vec3},
     prelude::Image,
     render::render_asset::RenderAssetUsages,
@@ -17,7 +19,7 @@ use wgpu::{Extent3d, TextureFormat};
 
 use crate::{
     oct_coords::GridMode,
-    render::{Imposter, ImposterData, RENDER_MULTISAMPLE_FLAG, USE_SOURCE_UV_Y_FLAG},
+    render::{Imposter, ImposterData, INDEXED_FLAG, RENDER_MULTISAMPLE_FLAG, USE_SOURCE_UV_Y_FLAG},
 };
 
 pub struct ImposterLoader;
@@ -108,29 +110,61 @@ impl AssetLoader for ImposterLoader {
             let packed_tile_offset = UVec2::new(packed_offset_x.parse()?, packed_offset_y.parse()?);
             let packed_tile_size = UVec2::new(packed_size_x.parse()?, packed_size_y.parse()?);
 
-            let raw = zip
-                .by_name("texture.png")?
+            let raw_pixels = zip
+                .by_name("pixels.png")?
                 .bytes()
                 .collect::<Result<Vec<_>, _>>()?;
-            let mut reader = image::ImageReader::new(std::io::Cursor::new(raw));
+            let mut reader = image::ImageReader::new(std::io::Cursor::new(raw_pixels));
             reader.set_format(image::ImageFormat::Png);
             reader.no_limits();
-            let bytes = reader.decode()?.into_bytes();
+            let pixels_bytes = reader.decode()?.into_bytes();
+            let pixels_x = (pixels_bytes.len() as f32 / 8.0).sqrt().ceil() as u32;
+            let pixels_y = (pixels_bytes.len() as f32 / (8 * pixels_x) as f32).ceil() as u32;
+            let pixels_image = Image::new(
+                Extent3d {
+                    width: pixels_x,
+                    height: pixels_y,
+                    depth_or_array_layers: 1,
+                },
+                wgpu::TextureDimension::D2,
+                pixels_bytes,
+                TextureFormat::Rg32Uint,
+                RenderAssetUsages::RENDER_WORLD,
+            );
+            let pixels_image = load_context.add_labeled_asset("pixels".to_owned(), pixels_image);
+
+            let raw_indices = zip
+                .by_name("indices.png")?
+                .bytes()
+                .collect::<Result<Vec<_>, _>>()?;
+            let mut reader = image::ImageReader::new(std::io::Cursor::new(raw_indices));
+            reader.set_format(image::ImageFormat::Png);
+            reader.no_limits();
+            let indices_bytes = reader.decode()?.into_bytes();
+
+            let use_u16 = pixels_x * pixels_y < 65536;
 
             let size: UVec2 = packed_tile_size * grid_size;
-            let image = Image::new(
+            let width = if use_u16 { (size.x + 1) / 2 } else { size.x };
+            debug!(
+                "load use_u16? {use_u16}, base size: {}, use size: {}, height: {}, total pix: {}",
+                size.x,
+                width,
+                size.y,
+                indices_bytes.len()
+            );
+            let indices_image = Image::new(
                 Extent3d {
-                    width: size.x,
+                    width,
                     height: size.y,
                     depth_or_array_layers: 1,
                 },
                 wgpu::TextureDimension::D2,
-                bytes,
-                TextureFormat::Rg32Uint,
+                indices_bytes,
+                TextureFormat::R32Uint,
                 RenderAssetUsages::RENDER_WORLD,
             );
-
-            let image = load_context.add_labeled_asset("texture".to_owned(), image);
+            let indices_image = load_context.add_labeled_asset("indices".to_owned(), indices_image);
 
             let flags = match load_settings.vertex_mode {
                 ImposterVertexMode::Billboard => 4,
@@ -147,7 +181,8 @@ impl AssetLoader for ImposterLoader {
                 "Horizontal" => GridMode::Horizontal,
                 _ => anyhow::bail!("bad mode `{}`", mode),
             }
-            .as_flags();
+            .as_flags()
+                + INDEXED_FLAG;
 
             Ok(Imposter {
                 data: ImposterData {
@@ -159,7 +194,11 @@ impl AssetLoader for ImposterLoader {
                     packed_tile_offset,
                     packed_tile_size,
                 },
-                material: Some(image),
+                pixels: pixels_image,
+                indices: indices_image,
+                // base_size: size.x * size.y * 8,
+                // compressed_size: size.x * size.y * if use_u16 { 1 } else { 2 }
+                //     + pixels_x * pixels_y * 8,
             })
         })
     }
@@ -183,13 +222,13 @@ pub fn pack_asset(grid_size: usize, image: &Image) -> (Image, UVec2, UVec2) {
 
     for grid_x in 0..grid_size {
         for grid_y in 0..grid_size {
-            for pix_x in 0..pixels_per_tile {
-                for pix_y in 0..pixels_per_tile {
+            for (pix_x, used_x) in used_x.iter_mut().enumerate() {
+                for (pix_y, used_y) in used_y.iter_mut().enumerate() {
                     let y = grid_y * pixels_per_tile + pix_y;
                     let x = grid_x * pixels_per_tile + pix_x;
                     if data[(y * width + x) * 2] != 0 {
-                        used_x[pix_x] = true;
-                        used_y[pix_y] = true;
+                        *used_x = true;
+                        *used_y = true;
                     }
                 }
             }
@@ -228,7 +267,7 @@ pub fn pack_asset(grid_size: usize, image: &Image) -> (Image, UVec2, UVec2) {
     let x_ratio = x_count as f32 / pixels_per_tile as f32;
     let y_ratio = y_count as f32 / pixels_per_tile as f32;
     let total_ratio = x_ratio * y_ratio;
-    println!("ratio: {total_ratio} ({x_ratio} * {y_ratio})");
+    debug!("ratio: {total_ratio} ({x_ratio} * {y_ratio})");
     if total_ratio == 0.0 {
         std::process::exit(1);
     }
@@ -253,7 +292,10 @@ pub fn pack_asset(grid_size: usize, image: &Image) -> (Image, UVec2, UVec2) {
         }
     }
 
-    let new_data_u8 = new_data.into_iter().map(|v| v.to_le_bytes()).flatten().collect::<Vec<_>>();
+    let new_data_u8 = new_data
+        .into_iter()
+        .flat_map(|v| v.to_le_bytes())
+        .collect::<Vec<_>>();
 
     let new_image = Image::new(
         Extent3d {
@@ -282,22 +324,135 @@ pub fn write_asset(
     image: Image,
     pack: bool,
 ) -> Result<(), anyhow::Error> {
+    let file = std::fs::File::create(path)?;
+    let mut zip = zip::ZipWriter::new(file);
+    let options =
+        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+
+    //trim blank edges
     let (image, packed_offset, packed_size) = if pack {
         pack_asset(grid_size as usize, &image)
     } else {
         (image, UVec2::ZERO, UVec2::splat(tile_size))
     };
 
-    let file = std::fs::File::create(path)?;
-    let mut zip = zip::ZipWriter::new(file);
-    let options =
-        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    // gather unique pixel pairs
+    let mut pixels = BTreeSet::<[u8; 8]>::default();
+    for chunk in image.data.chunks_exact(8) {
+        pixels.insert(chunk.try_into().unwrap());
+    }
 
-    let dyn_image = DynamicImage::ImageRgba8(ImageBuffer::from_raw(image.width() * 2, image.height(), image.data).unwrap());
+    // write unique pixels to an image
+    let pixels_x = (pixels.len() as f32).sqrt().ceil() as u32;
+    let pixels_y = (pixels.len() as f32 / pixels_x as f32).ceil() as u32;
+    let mut pixel_data = pixels.iter().copied().flatten().collect::<Vec<_>>();
+    // pad to square
+    pixel_data.extend(
+        std::iter::repeat(0u8)
+            .take(((pixels_x * pixels_y * 8) as usize).saturating_sub(pixel_data.len())),
+    );
+    let pixels_image = Image::new(
+        Extent3d {
+            width: pixels_x,
+            height: pixels_y,
+            depth_or_array_layers: 1,
+        },
+        wgpu::TextureDimension::D2,
+        pixel_data,
+        TextureFormat::Rg32Uint,
+        Default::default(),
+    );
+
+    // write pixels to zip
+    let dyn_image = DynamicImage::ImageRgba8(
+        ImageBuffer::from_raw(
+            pixels_image.width() * 2,
+            pixels_image.height(),
+            pixels_image.data,
+        )
+        .unwrap(),
+    );
     let mut cursor = Cursor::new(Vec::default());
-    dyn_image.write_to(&mut cursor, image::ImageFormat::Png).unwrap();
+    dyn_image
+        .write_to(&mut cursor, image::ImageFormat::Png)
+        .unwrap();
+    zip.start_file("pixels.png", options)?;
+    zip.write_all(&cursor.into_inner())?;
 
-    zip.start_file("texture.png", options)?;
+    // write indices to another image
+    let use_u16 = pixels_x * pixels_y < 65536;
+    debug!(
+        "use u16? {}*{}={} < 65536 - {}",
+        pixels_x,
+        pixels_y,
+        pixels_x * pixels_y,
+        use_u16
+    );
+    let pixel_lookup = pixels
+        .into_iter()
+        .enumerate()
+        .map(|(ix, p)| (p, ix))
+        .collect::<BTreeMap<_, _>>();
+    let mut pixel_indices = image
+        .data
+        .chunks_exact(8)
+        .flat_map(|chunk| {
+            let chunk: [u8; 8] = chunk.try_into().unwrap();
+            let index = *pixel_lookup.get(&chunk).unwrap();
+            if use_u16 {
+                (index as u16).to_le_bytes().to_vec()
+            } else {
+                (index as u32).to_le_bytes().to_vec()
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let width = if use_u16 {
+        if image.width() & 1 == 1 {
+            // pad each line to u32 boundary
+            for i in 0..image.height() {
+                pixel_indices.insert(
+                    (image.width() / 2 + i * (image.width() / 2 + 1)) as usize,
+                    0,
+                );
+                pixel_indices.insert(
+                    (image.width() / 2 + i * (image.width() / 2 + 1)) as usize,
+                    0,
+                );
+            }
+            image.width() / 2 + 1
+        } else {
+            image.width() / 2
+        }
+    } else {
+        image.width()
+    };
+    let indices_image = Image::new(
+        Extent3d {
+            width,
+            height: image.height(),
+            depth_or_array_layers: 1,
+        },
+        wgpu::TextureDimension::D2,
+        pixel_indices,
+        TextureFormat::R32Uint,
+        Default::default(),
+    );
+
+    // write indices to zip
+    let dyn_image = DynamicImage::ImageRgba8(
+        ImageBuffer::from_raw(
+            indices_image.width(),
+            indices_image.height(),
+            indices_image.data,
+        )
+        .unwrap(),
+    );
+    let mut cursor = Cursor::new(Vec::default());
+    dyn_image
+        .write_to(&mut cursor, image::ImageFormat::Png)
+        .unwrap();
+    zip.start_file("indices.png", options)?;
     zip.write_all(&cursor.into_inner())?;
 
     // write settings

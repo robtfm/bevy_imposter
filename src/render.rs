@@ -1,8 +1,12 @@
 use bevy::{
     asset::load_internal_asset,
     prelude::*,
-    render::render_resource::{AsBindGroup, ShaderRef, ShaderType},
+    render::{
+        render_asset::RenderAssetUsages,
+        render_resource::{AsBindGroup, ShaderRef, ShaderType},
+    },
 };
+use wgpu::{Extent3d, TextureFormat};
 
 use crate::{
     asset_loader::ImposterLoader,
@@ -15,8 +19,9 @@ pub const SHARED_HANDLE: Handle<Shader> = Handle::weak_from_u128(699899997614446
 pub const VERTEX_HANDLE: Handle<Shader> = Handle::weak_from_u128(591046068481766317);
 
 pub const VERTEX_BILLBOARD_FLAG: u32 = 4;
-pub const RENDER_MULTISAMPLE_FLAG: u32 = 16;
 pub const USE_SOURCE_UV_Y_FLAG: u32 = 8;
+pub const RENDER_MULTISAMPLE_FLAG: u32 = 16;
+pub const INDEXED_FLAG: u32 = 32;
 
 pub struct ImposterRenderPlugin;
 
@@ -38,8 +43,28 @@ impl Plugin for ImposterRenderPlugin {
         load_internal_asset!(app, VERTEX_HANDLE, "shaders/vertex.wgsl", Shader::from_wgsl);
 
         app.add_plugins(MaterialPlugin::<Imposter>::default())
-            .register_asset_loader(ImposterLoader);
+            .register_asset_loader(ImposterLoader)
+            .add_systems(Startup, setup);
     }
+}
+
+/// provides a fallback image for imposter indices, for use with dynamic imposting
+#[derive(Resource)]
+pub struct DummyIndicesImage(pub Handle<Image>);
+
+pub fn setup(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
+    let image = Image::new(
+        Extent3d {
+            width: 1,
+            height: 1,
+            depth_or_array_layers: 1,
+        },
+        wgpu::TextureDimension::D2,
+        vec![0, 0, 0, 0],
+        TextureFormat::R32Uint,
+        RenderAssetUsages::RENDER_WORLD,
+    );
+    commands.insert_resource(DummyIndicesImage(images.add(image)));
 }
 
 #[derive(ShaderType, Clone, Copy, PartialEq, Debug)]
@@ -66,6 +91,7 @@ impl ImposterData {
         billboard_vertices: bool,
         multisample: bool,
         use_mesh_uv_y: bool,
+        indexed: bool,
         alpha: f32,
     ) -> Self {
         Self {
@@ -89,7 +115,8 @@ impl ImposterData {
                     USE_SOURCE_UV_Y_FLAG
                 } else {
                     0
-                },
+                }
+                + if indexed { INDEXED_FLAG } else { 0 },
             alpha,
         }
     }
@@ -104,7 +131,11 @@ pub struct Imposter {
     #[uniform(200)]
     pub data: ImposterData,
     #[texture(201, dimension = "2d", sample_type = "u_int")]
-    pub material: Option<Handle<Image>>,
+    pub pixels: Handle<Image>,
+    // annoyingly we can't use an option here because bevy gives us an rgba8 fallback
+    // Res<DummyIndicesImage> gives a default you can drop in
+    #[texture(202, dimension = "2d", sample_type = "u_int")]
+    pub indices: Handle<Image>,
 }
 
 impl From<&Imposter> for ImposterKey {
@@ -153,6 +184,11 @@ impl Material for Imposter {
         };
         vert_defs.push(grid_mode.into());
         frag_defs.push(grid_mode.into());
+
+        if (key.bind_group_data.0 & INDEXED_FLAG) != 0 {
+            // indexed
+            frag_defs.push("INDEXED_PIXELS".into());
+        }
 
         Ok(())
     }

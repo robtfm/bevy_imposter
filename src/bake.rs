@@ -56,7 +56,7 @@ use bevy::{
         Extract, Render, RenderApp, RenderSet,
     },
     tasks::AsyncComputeTaskPool,
-    utils::Parallel,
+    utils::{HashMap, Parallel},
 };
 use wgpu::{BufferUsages, ImageCopyBuffer, ImageDataLayout, ShaderStages};
 
@@ -123,6 +123,7 @@ impl Plugin for ImposterBakePlugin {
             .init_resource::<ViewSortedRenderPhases<ImposterPhaseItem<Transparent3d>>>()
             .init_resource::<ImposterActualRenderCount>()
             .init_resource::<ImpostersBaked>()
+            .init_resource::<PartBaked>()
             .add_systems(ExtractSchedule, extract_imposter_cameras)
             .add_systems(
                 Render,
@@ -255,6 +256,8 @@ pub struct ImposterBakeCamera {
     pub continuous: bool,
     // whether to wait for all visible entities to be renderable (pipelines compiled, mesh/material data transferred to gpu)
     pub wait_for_render: bool,
+    // max number of tiles to render in a single frame
+    pub max_tiles_per_frame: usize,
     // signal for completion (if not continuous) - written by the library
     pub state: BakeState,
     // optional callback for completion
@@ -276,6 +279,7 @@ impl Default for ImposterBakeCamera {
             order: -99,
             continuous: false,
             wait_for_render: true,
+            max_tiles_per_frame: usize::MAX,
             state: BakeState::Rendering,
             callback: None,
             manual_camera_transforms: None,
@@ -394,6 +398,9 @@ impl Default for ImposterBakeBundle {
     }
 }
 
+#[derive(Resource, Default)]
+pub struct PartBaked(Arc<Mutex<HashMap<Entity, usize>>>);
+
 #[allow(clippy::type_complexity)]
 pub fn check_imposter_visibility<QF>(
     mut thread_queues: Local<Parallel<Vec<Entity>>>,
@@ -511,6 +518,7 @@ pub struct ExtractedImposterBakeCamera {
     pub subviews: Vec<(u32, u32, Entity)>,
     pub expected_count: usize,
     pub wait_for_render: bool,
+    pub max_tiles_per_frame: usize,
     pub channel: crossbeam_channel::Sender<BakeState>,
     pub callback: Option<ImageCallback>,
 }
@@ -636,6 +644,7 @@ pub fn extract_imposter_cameras(
     mut opaque: ResMut<ViewBinnedRenderPhases<ImposterPhaseItem<Opaque3d>>>,
     mut alphamask: ResMut<ViewBinnedRenderPhases<ImposterPhaseItem<AlphaMask3d>>>,
     mut transparent: ResMut<ViewSortedRenderPhases<ImposterPhaseItem<Transparent3d>>>,
+    part_baked: Res<PartBaked>,
     cameras: Extract<
         Query<(
             Entity,
@@ -677,10 +686,9 @@ pub fn extract_imposter_cameras(
             for x in 0..camera.grid_size {
                 let camera_transform =
                     if let Some(camera_transforms) = camera.manual_camera_transforms.as_ref() {
-                        camera_transforms
+                        *camera_transforms
                             .get((y * camera.grid_size + x) as usize)
                             .expect("not enough manual camera transforms")
-                            .clone()
                     } else {
                         let (normal, up) =
                             normal_from_grid(UVec2::new(x, y), camera.grid_mode, camera.grid_size);
@@ -719,6 +727,7 @@ pub fn extract_imposter_cameras(
                 subviews,
                 expected_count: expected_count.0,
                 wait_for_render: camera.wait_for_render,
+                max_tiles_per_frame: camera.max_tiles_per_frame,
                 channel: channel.sender.clone(),
                 callback: camera.callback.clone(),
             },
@@ -746,6 +755,11 @@ pub fn extract_imposter_cameras(
     opaque.retain(|entity, _| entities.contains(entity));
     alphamask.retain(|entity, _| entities.contains(entity));
     transparent.retain(|entity, _| entities.contains(entity));
+    part_baked
+        .0
+        .lock()
+        .unwrap()
+        .retain(|entity, _| entities.contains(entity));
 }
 
 fn copy_preprocess_bindgroups(
@@ -797,7 +811,8 @@ where
         // pretty similar to a prepass, so let's start there.
         // would be glorious if this was abstracted so we could avoid cheating like this, or copy/pasting 250 lines
         let mut descriptor = self.prepass_pipeline.specialize(key, layout)?;
-        descriptor.label = Some("imposter_bake_pipeline".into());
+        descriptor.label =
+            Some(format!("imposter_bake_pipeline {}", std::any::type_name::<M>()).into());
 
         // modify defs
         let defs = &mut descriptor.vertex.shader_defs;
@@ -1209,11 +1224,14 @@ impl ViewNode for ImposterBakeNode {
 
         let actual = world.resource::<ImposterActualRenderCount>();
 
+        let part_baked = world.resource::<PartBaked>();
+
         render_context.add_command_buffer_generation_task(move |render_device| {
             // we are counting on a shared resource, so have to take a unique lock within the task to ensure it
             // doesn't fail when multiple bake cameras exist.
             // probably a better way to do this
             let _parallel_lock = actual.1.lock().unwrap();
+            let mut part_baked = part_baked.0.lock().unwrap();
             *actual.0.lock().unwrap() = 0;
 
             let mut command_encoder =
@@ -1221,9 +1239,15 @@ impl ViewNode for ImposterBakeNode {
                     label: Some("imposter_command_encoder"),
                 });
 
-            let mut success = false;
+            let mut rendered = part_baked.get(&view).copied().unwrap_or_default();
 
             if camera.multisample == 1 {
+                if rendered > 0 {
+                    // grab the attachments once to disable clearing
+                    textures.output.get_attachment();
+                    textures.depth.get_attachment(StoreOp::Store);
+                }
+
                 // use a single renderpass
                 // Render pass setup
                 let render_pass = command_encoder.begin_render_pass(&RenderPassDescriptor {
@@ -1235,33 +1259,40 @@ impl ViewNode for ImposterBakeNode {
                 });
                 let mut render_pass = TrackedRenderPass::new(&render_device, render_pass);
 
-                // we use the batch from the dummy main view, which means items will be rendered potentially out of order
-                // TODO: see if it's worth binning for every individual view separately. since this is baking, probably not for opaque.
-                // if we use it for dynamic imposters in future there'd only be a single view being rendered anyway
+                if rendered == 0 {
+                    // run once to check if all the items are ready and rendering
 
-                // run once to check if all the items are ready and rendering
+                    render_pass.set_viewport(
+                        0.0,
+                        0.0,
+                        camera.tile_size as f32,
+                        camera.tile_size as f32,
+                        0.0,
+                        1.0,
+                    );
+                    // we use the batch from the dummy main view, which means items will be rendered potentially out of order
+                    // TODO: see if it's worth binning for every individual view separately. since this is baking, probably not for opaque.
+                    // if we use it for dynamic imposters in future there'd only be a single view being rendered anyway
+                    opaque_phase.render(&mut render_pass, world, camera.subviews[0].2);
+                    alphamask_phase.render(&mut render_pass, world, camera.subviews[0].2);
+                    transparent_phase.render(&mut render_pass, world, camera.subviews[0].2);
 
-                render_pass.set_viewport(
-                    0.0,
-                    0.0,
-                    camera.tile_size as f32,
-                    camera.tile_size as f32,
-                    0.0,
-                    1.0,
-                );
-                opaque_phase.render(&mut render_pass, world, camera.subviews[0].2);
-                alphamask_phase.render(&mut render_pass, world, camera.subviews[0].2);
-                transparent_phase.render(&mut render_pass, world, camera.subviews[0].2);
+                    let actual = *actual.0.lock().unwrap();
 
-                let actual = *actual.0.lock().unwrap();
-                success = actual == camera.expected_count;
-
-                if !success {
-                    warn!("not ready: {}/{}", actual, camera.expected_count);
+                    if actual != camera.expected_count && camera.wait_for_render {
+                        debug!("not ready: {}/{}", actual, camera.expected_count);
+                    } else {
+                        rendered += 1;
+                    }
                 }
 
-                if success || !camera.wait_for_render {
-                    for (x, y, view) in camera.subviews.iter().skip(1) {
+                if rendered > 0 {
+                    for (x, y, view) in camera
+                        .subviews
+                        .iter()
+                        .skip(rendered)
+                        .take(camera.max_tiles_per_frame)
+                    {
                         render_pass.set_viewport(
                             (*x * camera.tile_size) as f32,
                             (*y * camera.tile_size) as f32,
@@ -1273,12 +1304,14 @@ impl ViewNode for ImposterBakeNode {
                         opaque_phase.render(&mut render_pass, world, *view);
                         alphamask_phase.render(&mut render_pass, world, *view);
                         transparent_phase.render(&mut render_pass, world, *view);
+                        rendered += 1;
                     }
                 }
 
                 drop(render_pass);
             } else {
                 // manual multisample resolve requires multiple passes
+                let should_clear = rendered == 0;
 
                 // store the attachments so we keep the initial clears
                 let color_attachments = [Some(
@@ -1286,8 +1319,12 @@ impl ViewNode for ImposterBakeNode {
                 )];
                 let depth_attachment = Some(textures.depth.get_attachment(StoreOp::Store));
 
-                let mut is_first = true;
-                for (x, y, view) in camera.subviews.iter() {
+                for (x, y, view) in camera
+                    .subviews
+                    .iter()
+                    .skip(rendered)
+                    .take(camera.max_tiles_per_frame)
+                {
                     // Render pass setup
                     let render_pass = command_encoder.begin_render_pass(&RenderPassDescriptor {
                         label: Some("imposter_bake"),
@@ -1301,10 +1338,9 @@ impl ViewNode for ImposterBakeNode {
                     alphamask_phase.render(&mut render_pass, world, *view);
                     transparent_phase.render(&mut render_pass, world, *view);
 
-                    if is_first {
-                        is_first = false;
+                    if rendered == 0 {
                         let actual = *actual.0.lock().unwrap();
-                        success = actual == camera.expected_count;
+                        let success = actual == camera.expected_count;
 
                         if !success {
                             warn!("not ready: {}/{}", actual, camera.expected_count);
@@ -1315,8 +1351,13 @@ impl ViewNode for ImposterBakeNode {
                     }
 
                     drop(render_pass);
+                    rendered += 1;
 
                     // copy it
+                    if !should_clear {
+                        // grab the attachments once to disable clearing
+                        textures.output.get_attachment();
+                    }
                     let mut pass = command_encoder.begin_render_pass(&RenderPassDescriptor {
                         label: Some("imposter_blit"),
                         color_attachments: &[Some(textures.output.get_attachment())],
@@ -1340,11 +1381,14 @@ impl ViewNode for ImposterBakeNode {
                 }
             }
 
-            if success || !camera.wait_for_render {
-                if !success {
-                    warn!("imposting with some missing items");
-                }
-
+            part_baked.insert(view, rendered);
+            debug!(
+                "{:?} -> {}/{}",
+                view,
+                rendered,
+                camera.grid_size * camera.grid_size
+            );
+            if rendered as u32 == camera.grid_size * camera.grid_size {
                 if let Some(callback) = camera.callback.as_ref() {
                     debug!("send callback buffer");
                     let render_device = world.resource::<RenderDevice>();

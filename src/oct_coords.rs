@@ -23,7 +23,7 @@ impl GridMode {
             0 => GridMode::Spherical,
             1 => GridMode::Hemispherical,
             2 => GridMode::Horizontal,
-            _ => unreachable!()
+            _ => unreachable!(),
         }
     }
 }

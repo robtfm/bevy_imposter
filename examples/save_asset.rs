@@ -111,7 +111,7 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
     let unused = args.finish();
     if !unused.is_empty() {
         println!("unrecognized arguments: {unused:?}");
-        println!("args: \n--mode [h]emispherical or [s]pherical\n--grid n (grid size, default 8)\n--image n (image size, default 1024)\n--multisample-source <n> (average over a larger set of samples, default 8)\n--source path (asset to load, default flight helmet)\n--no-shrink (don't pack the output asset)");
+        println!("args: \n--mode [h]emispherical or [s]pherical\n--grid n (grid size, default 8)\n--tile n (tile size, default 128)\n--multisample-source <n> (average over a larger set of samples, default 8)\n--source path (asset to load, default flight helmet)\n--no-shrink (don't pack the output asset)");
         std::process::exit(1);
     }
 

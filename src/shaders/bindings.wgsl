@@ -17,10 +17,12 @@
 var<uniform> imposter_data: ImposterData;
 
 @group(2) @binding(201) 
-var imposter_texture: texture_2d<u32>;
+var imposter_pixels: texture_2d<u32>;
 
+#ifdef INDEXED_PIXELS
 @group(2) @binding(202)
-var imposter_sampler: sampler;
+var imposter_indices: texture_2d<u32>;
+#endif
 
 struct SamplePositions {
     tile_indices: array<vec2<u32>, 3>,
@@ -147,20 +149,38 @@ fn sample_uvs_unbounded(base_world_position: vec3<f32>, world_position: vec3<f32
     return uv;
 }
 
+fn single_sample(coords: vec2<f32>, bounds_min: vec2<f32>, bounds_max: vec2<f32>) -> UnpackedMaterialProps {
+#ifdef INDEXED_PIXELS
+    let pixel_dims = textureDimensions(imposter_pixels);
+    var index: u32;
+
+    if pixel_dims.x * pixel_dims.y < 65536 {
+        let index_pair = textureLoad(imposter_indices, vec2<u32>(coords * vec2(0.5, 1.0)), 0).r;
+        index = select(index_pair & 0xFFFF, index_pair >> 16, (u32(coords.x) & 1u) == 1u);
+    } else {
+        index = textureLoad(imposter_indices, vec2<u32>(coords), 0).r;
+    }
+
+    let index_x = index % pixel_dims.x;
+    let index_y = index / pixel_dims.x;
+
+    let props = textureLoad(imposter_pixels, vec2(index_x, index_y), 0).rg * vec2(select(1u, 0u, any(coords < bounds_min) || any(coords >= bounds_max)));
+#else
+    let props = textureLoad(imposter_pixels, vec2<u32>(coords), 0).rg * vec2(select(1u, 0u, any(coords < bounds_min) || any(coords >= bounds_max)));
+#endif
+    return unpack_props(props);
+}
+
 fn sample_tile_material(uv: vec2<f32>, grid_index: vec2<u32>, coord_offset: vec2<f32>) -> UnpackedMaterialProps {
     let bounds_min = vec2<f32>(grid_index * imposter_data.packed_size);
     let bounds_max = bounds_min + vec2<f32>(imposter_data.packed_size);
     let coords = bounds_min - vec2<f32>(imposter_data.packed_offset) + uv * vec2<f32>(imposter_data.base_tile_size) + coord_offset;
 
 #ifdef MATERIAL_MULTISAMPLE
-        let tl = coords;
-        let pixel_tl = unpack_props(textureLoad(imposter_texture, vec2<u32>(tl), 0).rg * vec2(select(1u, 0u, any(tl < bounds_min) || any(tl >= bounds_max))));
-        let tr = tl + vec2(1.0, 0.0);
-        let pixel_tr = unpack_props(textureLoad(imposter_texture, vec2<u32>(tr), 0).rg * vec2(select(1u, 0u, any(tr < bounds_min) || any(tr >= bounds_max))));
-        let bl = tl + vec2(0.0, 1.0);
-        let pixel_bl = unpack_props(textureLoad(imposter_texture, vec2<u32>(bl), 0).rg * vec2(select(1u, 0u, any(bl < bounds_min) || any(bl >= bounds_max))));
-        let br = tl + vec2(1.0, 1.0);
-        let pixel_br = unpack_props(textureLoad(imposter_texture, vec2<u32>(br), 0).rg * vec2(select(1u, 0u, any(br < bounds_min) || any(br >= bounds_max))));
+        let pixel_tl = single_sample(coords, bounds_min, bounds_max);
+        let pixel_tr = single_sample(coords + vec2(1.0, 0.0), bounds_min, bounds_max);
+        let pixel_bl = single_sample(coords + vec2(0.0, 1.0), bounds_min, bounds_max);
+        let pixel_br = single_sample(coords + vec2(1.0, 1.0), bounds_min, bounds_max);
 
         let frac = fract(coords);
         let pixel_top = weighted_props(pixel_tl, pixel_tr, 1.0 - frac.x);
@@ -168,7 +188,7 @@ fn sample_tile_material(uv: vec2<f32>, grid_index: vec2<u32>, coord_offset: vec2
         let pixel = weighted_props(pixel_top, pixel_bottom, 1.0 - frac.y);
         return pixel;
 #else
-        let pixel = unpack_props(textureLoad(imposter_texture, vec2<u32>(coords), 0).rg * vec2(select(1u, 0u, any(coords < bounds_min) || any(coords >= bounds_max))));
+        let pixel = single_sample(coords, bounds_min, bounds_max);
         return pixel;
 #endif
 }
