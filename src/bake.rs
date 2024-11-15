@@ -63,6 +63,7 @@ use wgpu::{BufferUsages, ImageCopyBuffer, ImageDataLayout, ShaderStages};
 use crate::{
     asset_loader::write_asset,
     oct_coords::{normal_from_grid, GridMode},
+    ImposterRenderPlugin,
 };
 
 pub struct ImposterBakePlugin;
@@ -71,15 +72,24 @@ pub struct ImposterBakePlugin;
 pub struct ImposterBakeGraph;
 
 pub const STANDARD_BAKE_HANDLE: Handle<Shader> = Handle::weak_from_u128(72833264206534166);
+pub const IMPOSTER_BAKE_HANDLE: Handle<Shader> = Handle::weak_from_u128(28332642065341667);
 pub const SHARED_HANDLE: Handle<Shader> = Handle::weak_from_u128(699899997614446892);
 pub const IMPOSTER_BLIT_HANDLE: Handle<Shader> = Handle::weak_from_u128(269989999761444689);
 
 impl Plugin for ImposterBakePlugin {
     fn build(&self, app: &mut App) {
+        app.add_plugins(ImposterRenderPlugin);
+
         load_internal_asset!(
             app,
             STANDARD_BAKE_HANDLE,
             "shaders/standard_material_imposter_baker.wgsl",
+            Shader::from_wgsl
+        );
+        load_internal_asset!(
+            app,
+            IMPOSTER_BAKE_HANDLE,
+            "shaders/imposter_imposter_baker.wgsl",
             Shader::from_wgsl
         );
         load_internal_asset!(app, SHARED_HANDLE, "shaders/shared.wgsl", Shader::from_wgsl);
@@ -153,6 +163,7 @@ impl Plugin for ImposterBakePlugin {
             );
 
         app.add_plugins(ImposterMaterialPlugin::<StandardMaterial>::default());
+        app.add_plugins(ImposterMaterialPlugin::<crate::Imposter>::default()); // imposterception
     }
 
     fn finish(&self, app: &mut App) {
@@ -171,6 +182,12 @@ pub trait ImposterBakeMaterial: Material {
 impl ImposterBakeMaterial for StandardMaterial {
     fn imposter_fragment_shader() -> ShaderRef {
         STANDARD_BAKE_HANDLE.into()
+    }
+}
+
+impl ImposterBakeMaterial for crate::Imposter {
+    fn imposter_fragment_shader() -> ShaderRef {
+        IMPOSTER_BAKE_HANDLE.into()
     }
 }
 
@@ -438,6 +455,12 @@ pub fn check_imposter_visibility<QF>(
         no_cpu_culling,
     ) in &mut view_query
     {
+        visible_entities.clear::<QF>();
+
+        if !camera.continuous && camera.state == BakeState::Finished {
+            return;
+        }
+
         let view_mask = maybe_view_mask.unwrap_or_default();
 
         visible_aabb_query.par_iter_mut().for_each_init(
@@ -484,7 +507,6 @@ pub fn check_imposter_visibility<QF>(
             },
         );
 
-        visible_entities.clear::<QF>();
         thread_queues.drain_into(visible_entities.get_mut::<QF>());
         expected_count.0 = 0;
     }
@@ -810,6 +832,13 @@ where
     > {
         // pretty similar to a prepass, so let's start there.
         // would be glorious if this was abstracted so we could avoid cheating like this, or copy/pasting 250 lines
+
+        // add DEPTH_CLAMP_ORTHO to force fragment shader
+        let key = MaterialPipelineKey {
+            mesh_key: key.mesh_key.union(MeshPipelineKey::DEPTH_CLAMP_ORTHO),
+            bind_group_data: key.bind_group_data,
+        };
+
         let mut descriptor = self.prepass_pipeline.specialize(key, layout)?;
         descriptor.label =
             Some(format!("imposter_bake_pipeline {}", std::any::type_name::<M>()).into());
@@ -829,6 +858,7 @@ where
             "DEPTH_CLAMP_ORTHO".into(),
             "DEFERRED_PREPASS".into(),
             "NORMAL_PREPASS_OR_DEFERRED_PREPASS".into(),
+            "VIEW_PROJECTION_ORTHOGRAPHIC".into(),
         ]);
 
         // force inclusion of the vertex normals/tangents
@@ -842,10 +872,31 @@ where
             .attributes
             .extend(buffer_layout.attributes);
 
+        let mut frag_defs = descriptor
+            .fragment
+            .map(|f| f.shader_defs)
+            .clone()
+            .unwrap_or_default();
+        frag_defs.retain(|d| match d {
+            ShaderDefVal::Bool(key, _) => !matches!(
+                key.as_str(),
+                "DEPTH_PREPASS" | "NORMAL_PREPASS" | "MOTION_VECTOR_PREPASS"
+            ),
+            _ => true,
+        });
+        frag_defs.extend([
+            "IMPOSTER_BAKE_PIPELINE".into(),
+            "PREPASS_FRAGMENT".into(),
+            "DEPTH_CLAMP_ORTHO".into(),
+            "DEFERRED_PREPASS".into(),
+            "NORMAL_PREPASS_OR_DEFERRED_PREPASS".into(),
+            "VIEW_PROJECTION_ORTHOGRAPHIC".into(),
+        ]);
+
         // replace frag state
         descriptor.fragment = Some(FragmentState {
             shader: self.frag_shader.clone(),
-            shader_defs: defs.clone(),
+            shader_defs: frag_defs,
             entry_point: "fragment".into(),
             targets: vec![Some(ColorTargetState {
                 format: TextureFormat::Rg32Uint,
@@ -1343,7 +1394,7 @@ impl ViewNode for ImposterBakeNode {
                         let success = actual == camera.expected_count;
 
                         if !success {
-                            warn!("not ready: {}/{}", actual, camera.expected_count);
+                            debug!("not ready: {}/{}", actual, camera.expected_count);
                             if camera.wait_for_render {
                                 break;
                             }
@@ -1389,6 +1440,7 @@ impl ViewNode for ImposterBakeNode {
                 camera.grid_size * camera.grid_size
             );
             if rendered as u32 == camera.grid_size * camera.grid_size {
+                part_baked.remove(&view);
                 if let Some(callback) = camera.callback.as_ref() {
                     debug!("send callback buffer");
                     let render_device = world.resource::<RenderDevice>();

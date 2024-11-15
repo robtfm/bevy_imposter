@@ -26,7 +26,7 @@ fn fragment(in: ImposterVertexOut) -> FragmentOutput {
 #endif
 
     let weights = samples.tile_weights;
-    let props_ab = weighted_props(props_a, props_b, weights.x / (weights.x + weights.y));
+    let props_ab = weighted_props(props_a, props_b, weights.x / max(weights.x + weights.y, 0.0001));
 #ifndef GRID_HORIZONTAL
     let props_final = weighted_props(props_ab, props_c, (weights.x + weights.y) / (weights.x + weights.y + weights.z));
 #else 
@@ -35,6 +35,8 @@ fn fragment(in: ImposterVertexOut) -> FragmentOutput {
 
     if props_final.rgba.a < 0.01 {
         discard;
+        // out.color = vec4(0.0, 0.2, 0.0, 0.2);
+        // return out;
     }
 
     var pbr_input = unpack_pbrinput(props_final, in.position);    

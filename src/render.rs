@@ -149,6 +149,10 @@ impl Material for Imposter {
         VERTEX_HANDLE.into()
     }
 
+    fn prepass_vertex_shader() -> ShaderRef {
+        VERTEX_HANDLE.into()
+    }
+
     fn fragment_shader() -> ShaderRef {
         FRAGMENT_HANDLE.into()
     }

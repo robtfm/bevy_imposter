@@ -33,7 +33,7 @@ pub const GRID_MASK: u32 = 3;
 pub fn normal_from_grid(grid_pos: UVec2, mode: GridMode, grid_size: u32) -> (Vec3, Vec3) {
     let n: Vec3 = match mode {
         GridMode::Spherical => {
-            let uv = UVec2::new(grid_pos.x, grid_pos.y).as_vec2() / (grid_size - 1) as f32;
+            let uv = UVec2::new(grid_pos.x, grid_pos.y).as_vec2() / (grid_size - 1).max(1) as f32;
 
             let x = uv.x * 2.0 - 1.0;
             let z = uv.y * 2.0 - 1.0;
@@ -50,7 +50,7 @@ pub fn normal_from_grid(grid_pos: UVec2, mode: GridMode, grid_size: u32) -> (Vec
             }
         }
         GridMode::Hemispherical => {
-            let uv = UVec2::new(grid_pos.x, grid_pos.y).as_vec2() / (grid_size - 1) as f32;
+            let uv = UVec2::new(grid_pos.x, grid_pos.y).as_vec2() / (grid_size - 1).max(1) as f32;
 
             let x = uv.x - uv.y;
             let z = -1.0 + uv.x + uv.y;

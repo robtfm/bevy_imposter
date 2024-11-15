@@ -31,7 +31,7 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>, mut meshes: Res
     };
 
     commands.spawn((MaterialMeshBundle::<Imposter> {
-        mesh: meshes.add(Plane3d::new(Vec3::Z, Vec2::splat(0.5)).mesh()),
+        mesh: meshes.add(Plane3d::new(Vec3::Z, Vec2::splat(0.5))),
         material: asset_server.load_with_settings::<_, ImposterLoaderSettings>(source, move |s| {
             s.multisample = multisample;
         }),

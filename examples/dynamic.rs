@@ -11,13 +11,16 @@ use bevy::{
     ecs::entity::EntityHashMap,
     math::FloatOrd,
     prelude::*,
-    render::primitives::{Aabb, Sphere},
+    render::{
+        primitives::{Aabb, Sphere},
+        view::RenderLayers,
+    },
     scene::InstanceId,
     utils::hashbrown::HashMap,
 };
 use boimp::{
     render::DummyIndicesImage, GridMode, Imposter, ImposterBakeBundle, ImposterBakeCamera,
-    ImposterBakePlugin, ImposterData, ImposterRenderPlugin,
+    ImposterBakePlugin, ImposterData,
 };
 use camera_controller::{CameraController, CameraControllerPlugin};
 use rand::{thread_rng, Rng};
@@ -55,7 +58,6 @@ fn main() {
             }),
             CameraControllerPlugin,
             ImposterBakePlugin,
-            ImposterRenderPlugin,
         ))
         .add_plugins((FrameTimeDiagnosticsPlugin, LogDiagnosticsPlugin::default()))
         .add_systems(Startup, setup)
@@ -406,15 +408,19 @@ fn setup_scene_after_load(
                 ..default()
             },
             camera_controller,
+            RenderLayers::default().with(1), // we keep imposters off the primary renderlayer to avoid imposterception
         ));
 
         // Spawn a default light if the scene does not have one
         if !scene_handle.has_light {
             info!("Spawning a directional light");
-            commands.spawn((DirectionalLightBundle {
-                transform: Transform::from_xyz(1.0, 1.0, 0.0).looking_at(Vec3::ZERO, Vec3::Y),
-                ..default()
-            },));
+            commands.spawn((
+                DirectionalLightBundle {
+                    transform: Transform::from_xyz(1.0, 1.0, 0.0).looking_at(Vec3::ZERO, Vec3::Y),
+                    ..default()
+                },
+                RenderLayers::default().with(1),
+            ));
 
             scene_handle.has_light = true;
         }
@@ -474,41 +480,40 @@ fn impost(
                 rng.gen_range(rotate_range.clone()),
                 rng.gen_range(rotate_range.clone()) * hemi_mult,
             );
-            commands.spawn((MaterialMeshBundle {
-                mesh: meshes.add(
-                    Plane3d::new(Vec3::Z, Vec2::splat(0.5))
-                        .mesh()
-                        .subdivisions(2),
-                ),
-                transform: Transform::from_translation(
-                    translation + Vec3::from(scene_handle.sphere.center),
-                )
-                .with_rotation(Quat::from_euler(
-                    EulerRot::XYZ,
-                    rotation.x,
-                    rotation.y,
-                    rotation.z,
-                )),
-                material: materials.add(Imposter {
-                    data: ImposterData::new(
-                        Vec3::ZERO,
-                        scene_handle.sphere.radius,
-                        settings.grid_size,
-                        settings.tile_size,
-                        UVec2::ZERO,
-                        UVec2::splat(settings.tile_size),
-                        settings.mode,
-                        true,
-                        settings.multisample_target,
-                        false,
-                        false,
-                        1.0,
-                    ),
-                    pixels: camera.target.clone().unwrap(),
-                    indices: dummy_indices.0.clone(),
-                }),
-                ..Default::default()
-            },));
+            commands.spawn((
+                MaterialMeshBundle {
+                    mesh: meshes.add(Plane3d::new(Vec3::Z, Vec2::splat(0.5))),
+                    transform: Transform::from_translation(
+                        translation + Vec3::from(scene_handle.sphere.center),
+                    )
+                    .with_rotation(Quat::from_euler(
+                        EulerRot::XYZ,
+                        rotation.x,
+                        rotation.y,
+                        rotation.z,
+                    )),
+                    material: materials.add(Imposter {
+                        data: ImposterData::new(
+                            Vec3::ZERO,
+                            scene_handle.sphere.radius,
+                            settings.grid_size,
+                            settings.tile_size,
+                            UVec2::ZERO,
+                            UVec2::splat(settings.tile_size),
+                            settings.mode,
+                            true,
+                            settings.multisample_target,
+                            false,
+                            false,
+                            1.0,
+                        ),
+                        pixels: camera.target.clone().unwrap(),
+                        indices: dummy_indices.0.clone(),
+                    }),
+                    ..Default::default()
+                },
+                RenderLayers::layer(1),
+            ));
         }
 
         commands.spawn(ImposterBakeBundle {
