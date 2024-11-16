@@ -157,6 +157,10 @@ impl Material for Imposter {
         FRAGMENT_HANDLE.into()
     }
 
+    fn prepass_fragment_shader() -> ShaderRef {
+        FRAGMENT_HANDLE.into()
+    }
+
     fn alpha_mode(&self) -> AlphaMode {
         AlphaMode::Blend
     }

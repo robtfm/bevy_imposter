@@ -1,8 +1,13 @@
 #import bevy_pbr::{
-    forward_io::FragmentOutput,
     pbr_functions::{apply_pbr_lighting, main_pass_post_lighting_processing},
     pbr_types::{STANDARD_MATERIAL_FLAGS_UNLIT_BIT, STANDARD_MATERIAL_FLAGS_FOG_ENABLED_BIT}
 }
+
+#ifdef PREPASS_PIPELINE
+ #import bevy_pbr::prepass_io::FragmentOutput;
+#else
+ #import bevy_pbr::forward_io::FragmentOutput;
+#endif
 
 #import boimp::shared::{ImposterVertexOut, unpack_pbrinput, weighted_props};
 #import boimp::bindings::{imposter_data, sample_positions_from_camera_dir, sample_tile, sample_tile_material};
@@ -45,6 +50,15 @@ fn fragment(in: ImposterVertexOut) -> FragmentOutput {
 
     pbr_input.material.base_color.a *= imposter_data.alpha;
 
+#ifdef PREPASS_PIPELINE
+    #ifdef NORMAL_PREPASS
+        out.normal = pbr_input.N;
+    #endif
+    // we don't support MOTION_VECTOR or DEFERRED
+    #ifdef DEPTH_CLAMP_ORTHO
+        out.frag_depth = in.position.z;
+    #endif
+#else 
     if (pbr_input.material.flags & STANDARD_MATERIAL_FLAGS_UNLIT_BIT) == 0u {
         out.color = apply_pbr_lighting(pbr_input);
     } else {
@@ -54,8 +68,7 @@ fn fragment(in: ImposterVertexOut) -> FragmentOutput {
     pbr_input.material.flags |= STANDARD_MATERIAL_FLAGS_FOG_ENABLED_BIT;
 
     out.color = main_pass_post_lighting_processing(pbr_input, out.color);
-
-    // out.color = clamp(out.color, vec4(0.2, 0.0, 0.0, 0.2), vec4(1.0));
+#endif
 
     return out;
 }
