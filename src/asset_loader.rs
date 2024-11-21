@@ -486,11 +486,11 @@ pub fn write_asset(
                     // pad each line to u32 boundary
                     for i in 0..image.height() {
                         pixel_indices.insert(
-                            (image.width() / 2 + i * (image.width() / 2 + 1)) as usize,
+                            (image.width() * 2 + i * (image.width() * 2 + 2)) as usize,
                             0,
                         );
                         pixel_indices.insert(
-                            (image.width() / 2 + i * (image.width() / 2 + 1)) as usize,
+                            (image.width() * 2 + i * (image.width() * 2 + 2)) as usize,
                             0,
                         );
                     }
