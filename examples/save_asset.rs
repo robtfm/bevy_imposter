@@ -18,6 +18,7 @@ struct BakeSettings {
     multisample: u32,
     output: String,
     shrink_asset: bool,
+    index_asset: bool,
 }
 
 fn main() {
@@ -107,11 +108,12 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
         .unwrap_or("assets/boimps/output.boimp".to_owned());
 
     let shrink_asset = !args.contains("--no-shrink");
+    let index_asset = !args.contains("--no-index");
 
     let unused = args.finish();
     if !unused.is_empty() {
         println!("unrecognized arguments: {unused:?}");
-        println!("args: \n--mode [h]emispherical or [s]pherical\n--grid n (grid size, default 8)\n--tile n (tile size, default 128)\n--multisample-source <n> (average over a larger set of samples, default 8)\n--source path (asset to load, default flight helmet)\n--no-shrink (don't pack the output asset)");
+        println!("args: \n--mode [h]emispherical or [s]pherical\n--grid n (grid size, default 8)\n--tile n (tile size, default 128)\n--multisample-source <n> (average over a larger set of samples, default 8)\n--source path (asset to load, default flight helmet)\n--no-shrink (don't pack the output asset)\n--no-index (don't index the output asset)");
         std::process::exit(1);
     }
 
@@ -127,6 +129,7 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
         multisample,
         output,
         shrink_asset,
+        index_asset,
     });
 }
 
@@ -257,7 +260,7 @@ fn setup_scene_after_load(
             multisample: settings.multisample,
             ..Default::default()
         };
-        let save_callback = camera.save_asset_callback(&settings.output, settings.shrink_asset);
+        let save_callback = camera.save_asset_callback(&settings.output, settings.shrink_asset, settings.index_asset);
 
         let output = settings.output.clone();
         camera.set_callback(move |image| {

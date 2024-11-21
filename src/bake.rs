@@ -163,7 +163,8 @@ impl Plugin for ImposterBakePlugin {
             );
 
         app.add_plugins(ImposterBakeMaterialPlugin::<StandardMaterial>::default());
-        app.add_plugins(ImposterBakeMaterialPlugin::<crate::Imposter>::default()); // imposterception
+        app.add_plugins(ImposterBakeMaterialPlugin::<crate::Imposter>::default());
+        // imposterception
     }
 
     fn finish(&self, app: &mut App) {
@@ -344,8 +345,15 @@ impl ImposterBakeCamera {
     // shrink_asset will pack the texture more tightly saving vram, but is slower.
     pub fn save_asset_callback(
         &self,
+        // todo use a Write here instead of a path
         path: impl AsRef<Path>,
+        // reduce vram usage by chopping blank edges off the tiles. takes a bit longer to save but has no impact on render speed or quality.
+        // often saves 50% vram (dependent on the shape of the model)
         shrink_asset: bool,
+        // reduce vram usage by storing only unique pixels (64 bits) into a separate image, and indexing with u16s or u32s in a separate image.
+        // often saves 50-75% (cumulative with shrinking, dependent on the texture and model complexity) but costs an extra texture lookup at render time.
+        // even if true, the asset will only be indexed if there is a size benefit.
+        index_asset: bool,
     ) -> impl FnOnce(bevy::prelude::Image) + Send + Sync + 'static {
         let mut path = path.as_ref().to_owned();
         if path.extension() != Some(OsStr::new("boimp")) {
@@ -365,6 +373,7 @@ impl ImposterBakeCamera {
                 mode,
                 image,
                 shrink_asset,
+                index_asset,
             ) {
                 error!("error writing imposter asset: {e}");
             } else {
