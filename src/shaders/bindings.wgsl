@@ -13,14 +13,14 @@
     weighted_props,
 };
 
-@group(2) @binding(200)
+@group(2) @binding(0)
 var<uniform> imposter_data: ImposterData;
 
-@group(2) @binding(201) 
+@group(2) @binding(1) 
 var imposter_pixels: texture_2d<u32>;
 
 #ifdef INDEXED_PIXELS
-@group(2) @binding(202)
+@group(2) @binding(2)
 var imposter_indices: texture_2d<u32>;
 #endif
 
@@ -133,18 +133,25 @@ fn oct_mode_normal_from_uv(grid_index: vec2<u32>, inv_rot: mat3x3<f32>) -> Basis
 
 fn sample_uvs_unbounded(base_world_position: vec3<f32>, world_position: vec3<f32>, inv_rot: mat3x3<f32>, grid_index: vec2<u32>) -> vec2<f32> {
     let basis = oct_mode_normal_from_uv(grid_index, inv_rot);
-
     let sample_normal = basis.normal;
+    let sample_r = cross(sample_normal, -basis.up);
+    let sample_u = cross(sample_r, sample_normal);
+
+#ifdef VIEW_PROJECTION_ORTHOGRAPHIC
+    let v = world_position - base_world_position;
+    let x = dot(v, normalize(sample_r) / (imposter_data.center_and_scale.w * 2.0));
+    let y = dot(v, normalize(sample_u) / (imposter_data.center_and_scale.w * 2.0));
+#else
     let camera_world_position = position_view_to_world(vec3<f32>(0.0));
     let cam_to_fragment = normalize(world_position - camera_world_position);
     let distance = dot(base_world_position - camera_world_position, sample_normal) / dot(cam_to_fragment, sample_normal);
     let intersect = distance * cam_to_fragment + camera_world_position;
     // calculate uv using basis of the sample plane
-    let sample_r = cross(sample_normal, -basis.up);
-    let sample_u = cross(sample_r, sample_normal);
     let v = intersect - base_world_position;
     let x = dot(v, normalize(sample_r) / (imposter_data.center_and_scale.w * 2.0));
     let y = dot(v, normalize(sample_u) / (imposter_data.center_and_scale.w * 2.0));
+#endif
+
     let uv = vec2<f32>(x, y) + 0.5;
     return uv;
 }

@@ -128,14 +128,15 @@ pub struct ImposterKey(u32);
 #[derive(Asset, TypePath, AsBindGroup, Clone, Debug)]
 #[bind_group_data(ImposterKey)]
 pub struct Imposter {
-    #[uniform(200)]
+    #[uniform(0)]
     pub data: ImposterData,
-    #[texture(201, dimension = "2d", sample_type = "u_int")]
+    #[texture(1, dimension = "2d", sample_type = "u_int")]
     pub pixels: Handle<Image>,
     // annoyingly we can't use an option here because bevy gives us an rgba8 fallback
     // Res<DummyIndicesImage> gives a default you can drop in
-    #[texture(202, dimension = "2d", sample_type = "u_int")]
+    #[texture(2, dimension = "2d", sample_type = "u_int")]
     pub indices: Handle<Image>,
+    pub alpha_mode: AlphaMode,
 }
 
 impl From<&Imposter> for ImposterKey {
@@ -162,7 +163,7 @@ impl Material for Imposter {
     }
 
     fn alpha_mode(&self) -> AlphaMode {
-        AlphaMode::Blend
+        self.alpha_mode
     }
 
     fn specialize(

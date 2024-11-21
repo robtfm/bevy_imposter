@@ -8,9 +8,9 @@ use std::{
 use anyhow::anyhow;
 use bevy::{
     asset::{AssetLoader, AsyncReadExt},
-    log::debug,
+    log::{debug, info},
     math::{UVec2, Vec3},
-    prelude::Image,
+    prelude::{AlphaMode, Image},
     render::render_asset::RenderAssetUsages,
 };
 use image::{DynamicImage, ImageBuffer};
@@ -41,8 +41,11 @@ pub struct ImposterLoaderSettings {
     pub multisample: bool,
     // take uv y coords from the source mesh
     pub use_source_uv_y: bool,
-    // additional alpha multiplier
+    // additional multiplier
     pub alpha: f32,
+    // roughly alpha mode. 0 -> Blend, 1 -> Opaque, (0-1) -> Mask
+    // if you need more control you can modify the loaded asset (we can't put actual alpha mode here because it doesn't serialize)
+    pub alpha_blend: f32,
 }
 
 impl Default for ImposterLoaderSettings {
@@ -52,6 +55,7 @@ impl Default for ImposterLoaderSettings {
             multisample: Default::default(),
             use_source_uv_y: Default::default(),
             alpha: 1.0,
+            alpha_blend: 0.0,
         }
     }
 }
@@ -184,6 +188,14 @@ impl AssetLoader for ImposterLoader {
             .as_flags()
                 + INDEXED_FLAG;
 
+            let alpha_mode = if load_settings.alpha_blend == 0.0 {
+                AlphaMode::Blend
+            } else if load_settings.alpha_blend == 1.0 {
+                AlphaMode::Opaque
+            } else {
+                AlphaMode::Mask(load_settings.alpha_blend)
+            };
+
             Ok(Imposter {
                 data: ImposterData {
                     center_and_scale: Vec3::ZERO.extend(scale),
@@ -199,6 +211,7 @@ impl AssetLoader for ImposterLoader {
                 // base_size: size.x * size.y * 8,
                 // compressed_size: size.x * size.y * if use_u16 { 1 } else { 2 }
                 //     + pixels_x * pixels_y * 8,
+                alpha_mode,
             })
         })
     }
@@ -324,6 +337,7 @@ pub fn write_asset(
     image: Image,
     pack: bool,
 ) -> Result<(), anyhow::Error> {
+    std::fs::create_dir_all(path.parent().unwrap())?;
     let file = std::fs::File::create(path)?;
     let mut zip = zip::ZipWriter::new(file);
     let options =
@@ -470,5 +484,6 @@ pub fn write_asset(
         .as_bytes(),
     )?;
     zip.finish()?;
+    info!("saved imposter to `{}`", path.to_string_lossy());
     Ok(())
 }

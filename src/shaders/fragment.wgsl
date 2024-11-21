@@ -52,7 +52,7 @@ fn fragment(in: ImposterVertexOut) -> FragmentOutput {
 
 #ifdef PREPASS_PIPELINE
     #ifdef NORMAL_PREPASS
-        out.normal = pbr_input.N;
+        out.normal = vec4<f32>(pbr_input.N, 0.0);
     #endif
     // we don't support MOTION_VECTOR or DEFERRED
     #ifdef DEPTH_CLAMP_ORTHO

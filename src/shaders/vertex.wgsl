@@ -65,24 +65,22 @@ fn vertex(vertex: Vertex) -> ImposterVertexOut {
 #endif
 
     out.position = position_world_to_clip(out.world_position);
-    
+
+#ifndef VIEW_PROJECTION_ORTHOGRAPHIC
     let relative_world_position = out.world_position - imposter_world_position;
     let distance = dot(relative_world_position, back);
     let projected_world_position = out.world_position - distance * back;
+#else
+    let projected_world_position = out.world_position;
+#endif
 
     let sample_positions = sample_positions_from_camera_dir(out.camera_direction);
 
-#ifndef VIEW_PROJECTION_ORTHOGRAPHIC
     // todo: doing uv samples in the vertex shader is a negligible perf improvement, and can cause interpolation issues up close.
     // potentially move this back into the frag shader.
     let uv_a = sample_uvs_unbounded(imposter_world_position, projected_world_position, inv_rot, sample_positions.tile_indices[0]);
     let uv_b = sample_uvs_unbounded(imposter_world_position, projected_world_position, inv_rot, sample_positions.tile_indices[1]);
     let uv_c = sample_uvs_unbounded(imposter_world_position, projected_world_position, inv_rot, sample_positions.tile_indices[2]);
-#else
-    let uv_a = vertex.uv;
-    let uv_b = vertex.uv;
-    let uv_c = vertex.uv;
-#endif
 
 #ifdef USE_SOURCE_UV_Y
         out.uv_ab = vec4(uv_a.x, 1.0-vertex.uv.y, uv_b.x, 1.0-vertex.uv.y);

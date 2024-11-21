@@ -162,8 +162,8 @@ impl Plugin for ImposterBakePlugin {
                 (NodePbr::GpuPreprocess, ImposterBakeNode),
             );
 
-        app.add_plugins(ImposterMaterialPlugin::<StandardMaterial>::default());
-        app.add_plugins(ImposterMaterialPlugin::<crate::Imposter>::default()); // imposterception
+        app.add_plugins(ImposterBakeMaterialPlugin::<StandardMaterial>::default());
+        app.add_plugins(ImposterBakeMaterialPlugin::<crate::Imposter>::default()); // imposterception
     }
 
     fn finish(&self, app: &mut App) {
@@ -195,11 +195,11 @@ pub trait ImposterBakeMaterialExtension: MaterialExtension {
     fn imposter_fragment_shader() -> ShaderRef;
 }
 
-pub struct ImposterMaterialPlugin<M: ImposterBakeMaterial> {
+pub struct ImposterBakeMaterialPlugin<M: ImposterBakeMaterial> {
     _p: PhantomData<fn() -> M>,
 }
 
-impl<M: ImposterBakeMaterial> Default for ImposterMaterialPlugin<M> {
+impl<M: ImposterBakeMaterial> Default for ImposterBakeMaterialPlugin<M> {
     fn default() -> Self {
         Self {
             _p: Default::default(),
@@ -207,7 +207,7 @@ impl<M: ImposterBakeMaterial> Default for ImposterMaterialPlugin<M> {
     }
 }
 
-impl<M: ImposterBakeMaterial> Plugin for ImposterMaterialPlugin<M>
+impl<M: ImposterBakeMaterial> Plugin for ImposterBakeMaterialPlugin<M>
 where
     M::Data: PartialEq + Eq + Hash + Clone,
 {

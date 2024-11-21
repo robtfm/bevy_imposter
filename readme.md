@@ -21,7 +21,7 @@ commands.spawn(ImposterBakeBundle {
 })
 ```
 
-for anything to be produced, the materials used in the area must implement `ImposterBakeMaterial`. This is automatically implemented for `StandardMaterial`s, other implementations can be registered by adding an `ImposterMaterialPlugin::<M>`. the frag shader is quite simple, see [the standard material version](src/shaders/standard_material_imposter_baker.wgsl).
+for anything to be produced, the materials used in the area must implement `ImposterBakeMaterial`. This is automatically implemented for `StandardMaterial`s, other implementations can be registered by adding an `ImposterBakeMaterialPlugin::<M>`. the frag shader is quite simple, see [the standard material version](src/shaders/standard_material_imposter_baker.wgsl).
 
 # render
 render the imposter with a `MaterialMeshBundle`:
