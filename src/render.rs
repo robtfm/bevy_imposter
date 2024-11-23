@@ -137,6 +137,7 @@ pub struct Imposter {
     #[texture(2, dimension = "2d", sample_type = "u_int")]
     pub indices: Handle<Image>,
     pub alpha_mode: AlphaMode,
+    pub vram_bytes: usize,
 }
 
 impl From<&Imposter> for ImposterKey {

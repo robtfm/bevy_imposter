@@ -115,7 +115,7 @@ impl AssetLoader for ImposterLoader {
             let packed_tile_size = UVec2::new(packed_size_x.parse()?, packed_size_y.parse()?);
 
             let is_indexed = zip.file_names().any(|n| n == "pixels.png");
-            let (pixels_image, indices_image) = if is_indexed {
+            let (pixels_image, indices_image, vram_bytes) = if is_indexed {
                 let raw_pixels = zip
                     .by_name("pixels.png")?
                     .bytes()
@@ -173,7 +173,7 @@ impl AssetLoader for ImposterLoader {
                 );
                 let indices_image =
                     load_context.add_labeled_asset("indices".to_owned(), indices_image);
-                (pixels_image, indices_image)
+                (pixels_image, indices_image, pixels_x * pixels_y * 8 + width * size.y * 4)
             } else {
                 let raw_image = zip
                     .by_name("texture.png")?
@@ -213,7 +213,7 @@ impl AssetLoader for ImposterLoader {
                     ),
                 );
 
-                (pixels_image, indices_image)
+                (pixels_image, indices_image, size.x * size.y * 8)
             };
 
             let flags = match load_settings.vertex_mode {
@@ -258,6 +258,7 @@ impl AssetLoader for ImposterLoader {
                 // compressed_size: size.x * size.y * if use_u16 { 1 } else { 2 }
                 //     + pixels_x * pixels_y * 8,
                 alpha_mode,
+                vram_bytes: vram_bytes as usize,                
             })
         })
     }

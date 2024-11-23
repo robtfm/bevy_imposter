@@ -510,6 +510,7 @@ fn impost(
                         pixels: camera.target.clone().unwrap(),
                         indices: dummy_indices.0.clone(),
                         alpha_mode: AlphaMode::Blend,
+                        vram_bytes: 0,
                     }),
                     ..Default::default()
                 },

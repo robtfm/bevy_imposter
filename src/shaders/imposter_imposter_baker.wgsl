@@ -34,7 +34,6 @@ fn fragment(in: ImposterVertexOut) -> @location(0) vec2<u32> {
     var pbr_input = unpack_pbrinput(props_final, in.position);
     pbr_input.N = inv_rot * normalize(pbr_input.N);
     pbr_input.world_normal = pbr_input.N;
-    pbr_input.material.base_color.a *= imposter_data.alpha;
 
     // write the imposter gbuffer
     return pack_pbrinput(pbr_input);
