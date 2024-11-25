@@ -27,11 +27,12 @@ fn fragment(in: ImposterVertexOut) -> @location(0) vec2<u32> {
     let props_final = props_ab;
 #endif
 
-    if props_final.rgba.a < 0.01 {
+    if props_final.rgba.a < 0.5 {
         discard;
     }
 
     var pbr_input = unpack_pbrinput(props_final, in.position);
+    pbr_input.material.base_color.a = 1.0;
     pbr_input.N = inv_rot * normalize(pbr_input.N);
     pbr_input.world_normal = pbr_input.N;
 

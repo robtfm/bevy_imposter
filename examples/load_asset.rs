@@ -40,6 +40,7 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>, mut meshes: Res
 
     commands.spawn(Camera3dBundle {
         transform: Transform::from_translation(Vec3::ONE).looking_at(Vec3::ZERO, Vec3::Y),
+        camera: Camera { clear_color: ClearColorConfig::Custom(Color::srgb(0.4,0.0,0.4)), ..Default::default() },
         ..Default::default()
     });
 
