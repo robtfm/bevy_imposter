@@ -23,15 +23,10 @@ struct ImposterData {
 struct ImposterVertexOut {
     @builtin(position) position: vec4<f32>,
     @location(0) world_position: vec3<f32>,
-    @location(1) camera_direction: vec3<f32>,
-    @location(2) base_world_position: vec3<f32>,
-    @location(3) inverse_rotation_0c: vec3<f32>,
-    @location(4) inverse_rotation_1c: vec3<f32>,
-    @location(5) inverse_rotation_2c: vec3<f32>,
-    @location(6) uv_a: vec4<f32>,
-    @location(7) uv_b: vec4<f32>,
-    @location(8) uv_c: vec4<f32>,
-    @location(9) back: vec3<f32>,
+    @location(1) base_world_position: vec3<f32>,
+    @location(2) inverse_rotation_0c: vec3<f32>,
+    @location(3) inverse_rotation_1c: vec3<f32>,
+    @location(4) inverse_rotation_2c: vec3<f32>,
 }
 
 struct UnpackedMaterialProps {
@@ -68,6 +63,7 @@ fn normalize_or_zero(in: vec3<f32>) -> vec3<f32> {
     let len = length(in);
     return select(in / len, vec3(0.0), len < 0.00001);
 }
+
 // rg32uint
 // r: [0-4] r, [5-9] g, [10-14] b, [15-19] a, [20-23] roughness, [24-27] metallic, [28-31] flags
 // g: [0-23] normal, [24-31] depth (linear, 0 => -1r, 128 => 0, 255 => +1r)

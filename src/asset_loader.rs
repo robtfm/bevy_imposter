@@ -173,7 +173,11 @@ impl AssetLoader for ImposterLoader {
                 );
                 let indices_image =
                     load_context.add_labeled_asset("indices".to_owned(), indices_image);
-                (pixels_image, indices_image, pixels_x * pixels_y * 8 + width * size.y * 4)
+                (
+                    pixels_image,
+                    indices_image,
+                    pixels_x * pixels_y * 8 + width * size.y * 4,
+                )
             } else {
                 let raw_image = zip
                     .by_name("texture.png")?
@@ -258,7 +262,7 @@ impl AssetLoader for ImposterLoader {
                 // compressed_size: size.x * size.y * if use_u16 { 1 } else { 2 }
                 //     + pixels_x * pixels_y * 8,
                 alpha_mode,
-                vram_bytes: vram_bytes as usize,                
+                vram_bytes: vram_bytes as usize,
             })
         })
     }

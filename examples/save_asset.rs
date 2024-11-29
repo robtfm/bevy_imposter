@@ -260,7 +260,11 @@ fn setup_scene_after_load(
             multisample: settings.multisample,
             ..Default::default()
         };
-        let save_callback = camera.save_asset_callback(&settings.output, settings.shrink_asset, settings.index_asset);
+        let save_callback = camera.save_asset_callback(
+            &settings.output,
+            settings.shrink_asset,
+            settings.index_asset,
+        );
 
         let output = settings.output.clone();
         camera.set_callback(move |image| {

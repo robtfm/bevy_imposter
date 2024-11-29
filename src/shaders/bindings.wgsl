@@ -134,35 +134,35 @@ fn oct_mode_normal_from_uv(grid_index: vec2<u32>, inv_rot: mat3x3<f32>) -> Basis
 // uv at mid, impact of 1 depth on uv
 fn sample_uvs_unbounded(base_world_position: vec3<f32>, world_position: vec3<f32>, inv_rot: mat3x3<f32>, grid_index: vec2<u32>) -> vec4<f32> {
     let basis = oct_mode_normal_from_uv(grid_index, inv_rot);
-    let sample_normal = basis.normal;
-    let sample_r = cross(sample_normal, -basis.up);
-    let sample_u = cross(sample_r, sample_normal);
-    let backplane_base_world_position = base_world_position + sample_normal * imposter_data.center_and_scale.w;
-
+    let sample_r_vec = cross(basis.normal, -basis.up);
+    let sample_u_vec = cross(sample_r_vec, basis.normal);
+    let sample_r = normalize(sample_r_vec);
+    let sample_u = normalize(sample_u_vec);
+    let backplane_base_world_position = base_world_position + basis.normal * imposter_data.center_and_scale.w;
 
 #ifdef VIEW_PROJECTION_ORTHOGRAPHIC
     let v = world_position - base_world_position;
-    let x = dot(v, normalize(sample_r) / (imposter_data.center_and_scale.w * 2.0));
-    let y = dot(v, normalize(sample_u) / (imposter_data.center_and_scale.w * 2.0));
+    let x = dot(v, sample_r / (imposter_data.center_and_scale.w * 2.0));
+    let y = dot(v, sample_u / (imposter_data.center_and_scale.w * 2.0));
 
     let backplane_v = world_position - backplane_base_world_position;
-    let backplane_x = dot(backplane_v, normalize(sample_r) / (imposter_data.center_and_scale.w * 2.0));
-    let backplane_y = dot(backplane_v, normalize(sample_u) / (imposter_data.center_and_scale.w * 2.0));
+    let backplane_x = dot(backplane_v, sample_r / (imposter_data.center_and_scale.w * 2.0));
+    let backplane_y = dot(backplane_v, sample_u / (imposter_data.center_and_scale.w * 2.0));
 #else
     let camera_world_position = position_view_to_world(vec3<f32>(0.0));
     let cam_to_fragment = normalize(world_position - camera_world_position);
-    let distance = dot(base_world_position - camera_world_position, sample_normal) / dot(cam_to_fragment, sample_normal);
+    let distance = dot(base_world_position - camera_world_position, basis.normal) / dot(cam_to_fragment, basis.normal);
     let intersect = distance * cam_to_fragment + camera_world_position;
     // calculate uv using basis of the sample plane
     let v = intersect - base_world_position;
-    let x = dot(v, normalize(sample_r) / (imposter_data.center_and_scale.w * 2.0));
-    let y = dot(v, normalize(sample_u) / (imposter_data.center_and_scale.w * 2.0));
+    let x = dot(v, sample_r / (imposter_data.center_and_scale.w * 2.0));
+    let y = dot(v, sample_u / (imposter_data.center_and_scale.w * 2.0));
 
-    let backplane_distance = dot(backplane_base_world_position - camera_world_position, sample_normal) / dot(cam_to_fragment, sample_normal);
+    let backplane_distance = dot(backplane_base_world_position - camera_world_position, basis.normal) / dot(cam_to_fragment, basis.normal);
     let backplane_intersect = backplane_distance * cam_to_fragment + camera_world_position;
     let backplane_v = backplane_intersect - backplane_base_world_position;
-    let backplane_x = dot(backplane_v, normalize(sample_r) / (imposter_data.center_and_scale.w * 2.0));
-    let backplane_y = dot(backplane_v, normalize(sample_u) / (imposter_data.center_and_scale.w * 2.0));
+    let backplane_x = dot(backplane_v, sample_r / (imposter_data.center_and_scale.w * 2.0));
+    let backplane_y = dot(backplane_v, sample_u / (imposter_data.center_and_scale.w * 2.0));
 #endif
 
     let uv = vec2<f32>(x, y) + 0.5;
@@ -176,6 +176,7 @@ fn single_sample(coords: vec2<f32>, bounds_min: vec2<f32>, bounds_max: vec2<f32>
     var index: u32;
 
     if pixel_dims.x * pixel_dims.y < 65536 {
+        // using u16 pairs
         let index_pair = textureLoad(imposter_indices, vec2<u32>(coords * vec2(0.5, 1.0)), 0).r;
         index = select(index_pair & 0xFFFF, index_pair >> 16, (u32(coords.x) & 1u) == 1u);
     } else {

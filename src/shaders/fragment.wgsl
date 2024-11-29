@@ -32,8 +32,7 @@ fn fragment(in: ImposterVertexOut) -> FragmentOutput {
 
     let back = normalize(back_vec);
 
-    let cam_to_frag = normalize((camera_world_position - in.world_position) * inv_rot);
-    let samples = sample_positions_from_camera_dir(cam_to_frag);
+    let samples = sample_positions_from_camera_dir(back * inv_rot);
 
     let uv_a = sample_uvs_unbounded(in.base_world_position, in.world_position, inv_rot, samples.tile_indices[0]);
     let uv_b = sample_uvs_unbounded(in.base_world_position, in.world_position, inv_rot, samples.tile_indices[1]);
