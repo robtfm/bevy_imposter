@@ -116,8 +116,8 @@ impl SceneHandle {
 
 fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
     let mut args = pico_args::Arguments::from_env();
-    let grid_size = args.value_from_str("--grid").unwrap_or(15);
-    let tile_size = args.value_from_str("--tile").unwrap_or(128);
+    let grid_size = args.value_from_str("--grid").unwrap_or(9);
+    let tile_size = args.value_from_str("--tile").unwrap_or(64);
     let mode = match args
         .value_from_str("--mode")
         .unwrap_or("h".to_owned())

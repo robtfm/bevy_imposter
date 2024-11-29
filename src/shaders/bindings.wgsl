@@ -131,16 +131,23 @@ fn oct_mode_normal_from_uv(grid_index: vec2<u32>, inv_rot: mat3x3<f32>) -> Basis
     return basis;
 }
 
-fn sample_uvs_unbounded(base_world_position: vec3<f32>, world_position: vec3<f32>, inv_rot: mat3x3<f32>, grid_index: vec2<u32>) -> vec2<f32> {
+// uv at mid, impact of 1 depth on uv
+fn sample_uvs_unbounded(base_world_position: vec3<f32>, world_position: vec3<f32>, inv_rot: mat3x3<f32>, grid_index: vec2<u32>) -> vec4<f32> {
     let basis = oct_mode_normal_from_uv(grid_index, inv_rot);
     let sample_normal = basis.normal;
     let sample_r = cross(sample_normal, -basis.up);
     let sample_u = cross(sample_r, sample_normal);
+    let backplane_base_world_position = base_world_position + sample_normal * imposter_data.center_and_scale.w;
+
 
 #ifdef VIEW_PROJECTION_ORTHOGRAPHIC
     let v = world_position - base_world_position;
     let x = dot(v, normalize(sample_r) / (imposter_data.center_and_scale.w * 2.0));
     let y = dot(v, normalize(sample_u) / (imposter_data.center_and_scale.w * 2.0));
+
+    let backplane_v = world_position - backplane_base_world_position;
+    let backplane_x = dot(backplane_v, normalize(sample_r) / (imposter_data.center_and_scale.w * 2.0));
+    let backplane_y = dot(backplane_v, normalize(sample_u) / (imposter_data.center_and_scale.w * 2.0));
 #else
     let camera_world_position = position_view_to_world(vec3<f32>(0.0));
     let cam_to_fragment = normalize(world_position - camera_world_position);
@@ -150,10 +157,17 @@ fn sample_uvs_unbounded(base_world_position: vec3<f32>, world_position: vec3<f32
     let v = intersect - base_world_position;
     let x = dot(v, normalize(sample_r) / (imposter_data.center_and_scale.w * 2.0));
     let y = dot(v, normalize(sample_u) / (imposter_data.center_and_scale.w * 2.0));
+
+    let backplane_distance = dot(backplane_base_world_position - camera_world_position, sample_normal) / dot(cam_to_fragment, sample_normal);
+    let backplane_intersect = backplane_distance * cam_to_fragment + camera_world_position;
+    let backplane_v = backplane_intersect - backplane_base_world_position;
+    let backplane_x = dot(backplane_v, normalize(sample_r) / (imposter_data.center_and_scale.w * 2.0));
+    let backplane_y = dot(backplane_v, normalize(sample_u) / (imposter_data.center_and_scale.w * 2.0));
 #endif
 
     let uv = vec2<f32>(x, y) + 0.5;
-    return uv;
+    let backplane_uv = vec2<f32>(backplane_x, backplane_y) + 0.5;
+    return vec4<f32>(uv, (backplane_uv - uv));
 }
 
 fn single_sample(coords: vec2<f32>, bounds_min: vec2<f32>, bounds_max: vec2<f32>) -> UnpackedMaterialProps {
@@ -178,24 +192,43 @@ fn single_sample(coords: vec2<f32>, bounds_min: vec2<f32>, bounds_max: vec2<f32>
     return unpack_props(props);
 }
 
-fn sample_tile_material(uv: vec2<f32>, grid_index: vec2<u32>, coord_offset: vec2<f32>) -> UnpackedMaterialProps {
+fn sample_tile_material(uv_and_dd: vec4<f32>, grid_index: vec2<u32>, coord_offset: vec2<f32>) -> UnpackedMaterialProps {
     let bounds_min = vec2<f32>(grid_index * imposter_data.packed_size);
     let bounds_max = bounds_min + vec2<f32>(imposter_data.packed_size);
-    let coords = bounds_min - vec2<f32>(imposter_data.packed_offset) + uv * vec2<f32>(imposter_data.base_tile_size) + coord_offset;
+    let coords_unadjusted = bounds_min - vec2<f32>(imposter_data.packed_offset) + uv_and_dd.xy * vec2<f32>(imposter_data.base_tile_size) + coord_offset;
 
 #ifdef MATERIAL_MULTISAMPLE
+        // multisample for depth
+        let pixel_tl_depth = single_sample(coords_unadjusted, bounds_min, bounds_max);
+        let pixel_tr_depth = single_sample(coords_unadjusted + vec2(1.0, 0.0), bounds_min, bounds_max);
+        let pixel_bl_depth = single_sample(coords_unadjusted + vec2(0.0, 1.0), bounds_min, bounds_max);
+        let pixel_br_depth = single_sample(coords_unadjusted + vec2(1.0, 1.0), bounds_min, bounds_max);
+
+        let frac = fract(coords_unadjusted);
+        let pixel_top_depth = weighted_props(pixel_tl_depth, pixel_tr_depth, 1.0 - frac.x);
+        let pixel_bottom_depth = weighted_props(pixel_bl_depth, pixel_br_depth, 1.0 - frac.x);
+        let pixel_depth = weighted_props(pixel_top_depth, pixel_bottom_depth, 1.0 - frac.y);
+        let depth = pixel_depth.depth;
+
+        let coords = coords_unadjusted + depth * uv_and_dd.zw * vec2<f32>(imposter_data.base_tile_size);
+
+        // multisample final material
         let pixel_tl = single_sample(coords, bounds_min, bounds_max);
         let pixel_tr = single_sample(coords + vec2(1.0, 0.0), bounds_min, bounds_max);
         let pixel_bl = single_sample(coords + vec2(0.0, 1.0), bounds_min, bounds_max);
         let pixel_br = single_sample(coords + vec2(1.0, 1.0), bounds_min, bounds_max);
 
-        let frac = fract(coords);
-        let pixel_top = weighted_props(pixel_tl, pixel_tr, 1.0 - frac.x);
-        let pixel_bottom = weighted_props(pixel_bl, pixel_br, 1.0 - frac.x);
-        let pixel = weighted_props(pixel_top, pixel_bottom, 1.0 - frac.y);
+        let frac2 = fract(coords);
+        let pixel_top = weighted_props(pixel_tl, pixel_tr, 1.0 - frac2.x);
+        let pixel_bottom = weighted_props(pixel_bl, pixel_br, 1.0 - frac2.x);
+        let pixel = weighted_props(pixel_top, pixel_bottom, 1.0 - frac2.y);
         return pixel;
 #else
+        let pixel_depth = single_sample(coords_unadjusted, bounds_min, bounds_max);
+        let depth = pixel_depth.depth;
+        let coords = coords_unadjusted + depth * uv_and_dd.zw * vec2<f32>(imposter_data.base_tile_size);
         let pixel = single_sample(coords, bounds_min, bounds_max);
+
         return pixel;
 #endif
 }

@@ -30,17 +30,20 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>, mut meshes: Res
         std::process::exit(1);
     };
 
-    commands.spawn((MaterialMeshBundle::<Imposter> {
+    commands.spawn(MaterialMeshBundle::<Imposter> {
         mesh: meshes.add(Plane3d::new(Vec3::Z, Vec2::splat(0.5))),
         material: asset_server.load_with_settings::<_, ImposterLoaderSettings>(source, move |s| {
             s.multisample = multisample;
         }),
         ..default()
-    },));
+    });
 
     commands.spawn(Camera3dBundle {
         transform: Transform::from_translation(Vec3::ONE).looking_at(Vec3::ZERO, Vec3::Y),
-        camera: Camera { clear_color: ClearColorConfig::Custom(Color::srgb(0.4,0.0,0.4)), ..Default::default() },
+        camera: Camera {
+            clear_color: ClearColorConfig::Custom(Color::srgb(0.4, 0.0, 0.4)),
+            ..Default::default()
+        },
         ..Default::default()
     });
 

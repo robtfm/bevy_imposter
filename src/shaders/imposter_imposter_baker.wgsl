@@ -13,8 +13,8 @@ fn fragment(in: ImposterVertexOut) -> @location(0) vec2<u32> {
         in.inverse_rotation_2c,
     );
 
-    let props_a = sample_tile_material(in.uv_ab.xy, samples.tile_indices[0], vec2(0.0));
-    let props_b = sample_tile_material(in.uv_ab.zw, samples.tile_indices[1], vec2(0.0));
+    let props_a = sample_tile_material(in.uv_a, samples.tile_indices[0], vec2(0.0));
+    let props_b = sample_tile_material(in.uv_b, samples.tile_indices[1], vec2(0.0));
 #ifndef GRID_HORIZONTAL
     let props_c = sample_tile_material(in.uv_c, samples.tile_indices[2], vec2(0.0));
 #endif

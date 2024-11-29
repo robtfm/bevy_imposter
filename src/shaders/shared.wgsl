@@ -7,6 +7,9 @@
     mesh_view_bindings::view,
 };
 
+const IMPOSTER_MATERIAL_UNLIT: u32 = 1;
+const IMPOSTER_MATERIAL_EMISSIVE: u32 = 2;
+
 struct ImposterData {
     center_and_scale: vec4<f32>,
     packed_offset: vec2<u32>,
@@ -25,8 +28,10 @@ struct ImposterVertexOut {
     @location(3) inverse_rotation_0c: vec3<f32>,
     @location(4) inverse_rotation_1c: vec3<f32>,
     @location(5) inverse_rotation_2c: vec3<f32>,
-    @location(6) uv_ab: vec4<f32>,
-    @location(7) uv_c: vec2<f32>,
+    @location(6) uv_a: vec4<f32>,
+    @location(7) uv_b: vec4<f32>,
+    @location(8) uv_c: vec4<f32>,
+    @location(9) back: vec3<f32>,
 }
 
 struct UnpackedMaterialProps {
@@ -35,6 +40,7 @@ struct UnpackedMaterialProps {
     roughness: f32,
     metallic: f32,
     flags: u32,
+    depth: f32, // [-1..1]
 }
 
 fn spherical_uv_from_normal(dir: vec3<f32>) -> vec2<f32> {
@@ -63,8 +69,8 @@ fn normalize_or_zero(in: vec3<f32>) -> vec3<f32> {
     return select(in / len, vec3(0.0), len < 0.00001);
 }
 // rg32uint
-// r: [0-4] r, [5-9] g, [10-14] b, [15] a, [16-23] roughness, [24-31] metallic
-// g: [0-23] normal, [24-31] flags (unlit etc)
+// r: [0-4] r, [5-9] g, [10-14] b, [15-19] a, [20-23] roughness, [24-27] metallic, [28-31] flags
+// g: [0-23] normal, [24-31] depth (linear, 0 => -1r, 128 => 0, 255 => +1r)
 
 // pack
 fn pack_bits(input: f32, offset: u32, count: u32) -> u32 {
@@ -72,35 +78,41 @@ fn pack_bits(input: f32, offset: u32, count: u32) -> u32 {
     return u32(saturate(input) * f32(mask) + 0.5) << offset;
 }
 
-fn pack_normal_and_flags(normal: vec3<f32>, flags: u32) -> u32 {
+fn pack_normal_and_depth(normal: vec3<f32>, depth: f32) -> u32 {
     let octahedral_normal = spherical_uv_from_normal(normal);
     return 
         pack_bits(octahedral_normal.x, 0u, 12u) + 
         pack_bits(octahedral_normal.y, 12u, 12u) +
-        (flags << 24u);
+        pack_bits(depth, 24u, 8u);
 }
 
-fn pack_rgba_roughness_metallic(albedo: vec4<f32>, roughness: f32, metallic: f32) -> u32 {
+fn pack_rgba_roughness_metallic_flags(albedo: vec4<f32>, roughness: f32, metallic: f32, flags: u32) -> u32 {
     return 
         pack_bits(albedo.r, 0u, 5u) +
         pack_bits(albedo.g, 5u, 5u) +
         pack_bits(albedo.b, 10u, 5u) +
         pack_bits(albedo.a, 15u, 5u) +
-        pack_bits(roughness, 20u, 6u) +
-        pack_bits(metallic, 26u, 6u);
+        pack_bits(roughness, 20u, 4u) +
+        pack_bits(metallic, 24u, 4u) + 
+        (flags << 28u);
 }
 
 fn pack_props(input: UnpackedMaterialProps) -> vec2<u32> {
     return vec2<u32>(
-        pack_rgba_roughness_metallic(input.rgba, input.roughness, input.metallic),
-        pack_normal_and_flags(input.normal, input.flags)
+        pack_rgba_roughness_metallic_flags(input.rgba, input.roughness, input.metallic, input.flags),
+        pack_normal_and_depth(input.normal, input.depth * 0.5 + 0.5)
     );
 }
 
 fn pack_pbrinput(input: PbrInput) -> vec2<u32> {
+    let use_emissive = length(input.material.base_color.rgb) < length(input.material.emissive.rgb);
+    let color = select(input.material.base_color, input.material.emissive, use_emissive);
+    let flags = 
+        u32((input.material.flags & STANDARD_MATERIAL_FLAGS_UNLIT_BIT) != 0u) * IMPOSTER_MATERIAL_UNLIT + 
+        u32(use_emissive) * IMPOSTER_MATERIAL_EMISSIVE;
     return vec2<u32>(
-        pack_rgba_roughness_metallic(input.material.base_color, input.material.perceptual_roughness, input.material.metallic),
-        pack_normal_and_flags(input.world_normal, u32((input.material.flags & STANDARD_MATERIAL_FLAGS_UNLIT_BIT) != 0u))
+        pack_rgba_roughness_metallic_flags(vec4(color.rgb, input.material.base_color.a), input.material.perceptual_roughness, input.material.metallic, flags),
+        pack_normal_and_depth(input.world_normal, input.frag_coord.z)
     );
 }
 
@@ -117,8 +129,12 @@ fn unpack_normal(input: u32) -> vec3<f32> {
     ));
 }
 
+fn unpack_depth(input: u32) -> f32 {
+    return unpack_bits(input, 24u, 8u) * 2.0 - 1.0;
+}
+
 fn unpack_flags(input: u32) -> u32 {
-    return (input >> 24u) & 0xFF;
+    return (input >> 28u);
 }
 
 fn unpack_rgba(input: u32) -> vec4<f32> {
@@ -131,11 +147,11 @@ fn unpack_rgba(input: u32) -> vec4<f32> {
 }
 
 fn unpack_roughness(input: u32) -> f32 {
-    return clamp(unpack_bits(input, 20u, 6u), 0.1, 0.9);
+    return clamp(unpack_bits(input, 20u, 4u), 0.1, 0.9);
 }
 
 fn unpack_metallic(input: u32) -> f32 {
-    return clamp(unpack_bits(input, 26u, 6u), 0.1, 0.9);
+    return clamp(unpack_bits(input, 24u, 4u), 0.1, 0.9);
 }
 
 fn unpack_props(packed: vec2<u32>) -> UnpackedMaterialProps {
@@ -143,8 +159,9 @@ fn unpack_props(packed: vec2<u32>) -> UnpackedMaterialProps {
     props.rgba = unpack_rgba(packed.r);
     props.roughness = unpack_roughness(packed.r);
     props.metallic = unpack_metallic(packed.r);
+    props.flags = unpack_flags(packed.r);
     props.normal = unpack_normal(packed.g);
-    props.flags = unpack_flags(packed.g);
+    props.depth = unpack_depth(packed.g);
     return props;
 }
 
@@ -165,20 +182,26 @@ fn weighted_props(a: UnpackedMaterialProps, b: UnpackedMaterialProps, weight_a: 
     out.roughness = a.roughness * wa + b.roughness * wb;
     out.metallic = a.metallic * wa + b.metallic * wb;
     out.normal = normalize_or_zero(a.normal * wa + b.normal * wb);
-    out.flags = a.flags;
+    out.depth = a.depth * wa + b.depth * wb;
+    out.flags = select(a.flags, b.flags, wa < wb);
     return out;
 }
 
 fn unpack_pbrinput(props: UnpackedMaterialProps, frag_coord: vec4<f32>) -> PbrInput {
     var input = pbr_input_new();
 
-    input.material.base_color = props.rgba;
-    input.material.perceptual_roughness = props.roughness;
-    input.material.metallic = props.metallic;
 
-    if props.flags != 0u {
+    if (props.flags & IMPOSTER_MATERIAL_UNLIT) != 0u {
         input.material.flags |= STANDARD_MATERIAL_FLAGS_UNLIT_BIT;
     }
+    let use_emissive = (props.flags & IMPOSTER_MATERIAL_EMISSIVE) != 0u;
+
+    input.material.base_color = props.rgba;
+    if use_emissive {
+        input.material.emissive = props.rgba;
+    }
+    input.material.perceptual_roughness = props.roughness;
+    input.material.metallic = props.metallic;
 
     input.N = props.normal;
     input.world_normal = input.N;
