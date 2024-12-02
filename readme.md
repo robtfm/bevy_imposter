@@ -36,7 +36,7 @@ commands.spawn(MaterialMeshBundle::<Imposter> {
 });
 ```
 
-for billboarding, use a `Rectangle` or `Plane3d::new(Vec3::Z, Vec2::splat(0.5))` mesh. for non-billboarding, any mesh will do.
+Use a `Rectangle` or `Plane3d::new(Vec3::Z, Vec2::splat(0.5))` mesh. 
 
 # examples:
 ## `dynamic` 

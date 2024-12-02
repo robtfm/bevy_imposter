@@ -382,6 +382,10 @@ fn setup_scene_after_load(
         info!("Spawning a controllable 3D perspective camera");
         let mut projection = PerspectiveProjection::default();
         projection.far = projection.far.max(size * 10.0);
+        // let projection = OrthographicProjection {
+        //     scaling_mode: bevy::render::camera::ScalingMode::FixedVertical(10.0),
+        //     ..Default::default()
+        // };
 
         let walk_speed = size * 3.0;
         let camera_controller = CameraController {
@@ -501,9 +505,7 @@ fn impost(
                             UVec2::ZERO,
                             UVec2::splat(settings.tile_size),
                             settings.mode,
-                            true,
                             settings.multisample_target,
-                            false,
                             false,
                             1.0,
                         ),

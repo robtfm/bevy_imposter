@@ -1,11 +1,7 @@
 // niche use case: providing a custom mesh allows for explicit control of the sampled y coords for horizontal billboards
 
 use bevy::{asset::LoadState, prelude::*};
-use boimp::{
-    asset_loader::{ImposterLoaderSettings, ImposterVertexMode},
-    render::Imposter,
-    ImposterRenderPlugin,
-};
+use boimp::{asset_loader::ImposterLoaderSettings, render::Imposter, ImposterRenderPlugin};
 use camera_controller::{CameraController, CameraControllerPlugin};
 
 #[path = "helpers/camera_controller.rs"]
@@ -60,8 +56,6 @@ fn setup(
             material: asset_server.load_with_settings::<_, ImposterLoaderSettings>(
                 source,
                 move |s| {
-                    s.vertex_mode = ImposterVertexMode::NoBillboard;
-                    s.use_source_uv_y = true;
                     s.multisample = multisample;
                 },
             ),

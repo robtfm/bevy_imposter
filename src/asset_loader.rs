@@ -19,28 +19,15 @@ use wgpu::{Extent3d, TextureFormat};
 
 use crate::{
     oct_coords::GridMode,
-    render::{Imposter, ImposterData, INDEXED_FLAG, RENDER_MULTISAMPLE_FLAG, USE_SOURCE_UV_Y_FLAG},
+    render::{Imposter, ImposterData, INDEXED_FLAG, RENDER_MULTISAMPLE_FLAG},
 };
 
 pub struct ImposterLoader;
 
-#[derive(Serialize, Deserialize, Default)]
-pub enum ImposterVertexMode {
-    // should be used with a Rectangle / Plane3d(normal: Vec3::Z) mesh
-    #[default]
-    Billboard,
-    // can be used with any mesh
-    NoBillboard,
-}
-
 #[derive(Serialize, Deserialize)]
 pub struct ImposterLoaderSettings {
-    // billboard / no billboard
-    pub vertex_mode: ImposterVertexMode,
     // smooth sample the material texture
     pub multisample: bool,
-    // take uv y coords from the source mesh
-    pub use_source_uv_y: bool,
     // additional multiplier
     pub alpha: f32,
     // roughly alpha mode. 0 -> Blend, 1 -> Opaque, (0-1) -> Mask
@@ -51,9 +38,7 @@ pub struct ImposterLoaderSettings {
 impl Default for ImposterLoaderSettings {
     fn default() -> Self {
         Self {
-            vertex_mode: Default::default(),
             multisample: Default::default(),
-            use_source_uv_y: Default::default(),
             alpha: 1.0,
             alpha_blend: 0.0,
         }
@@ -220,14 +205,8 @@ impl AssetLoader for ImposterLoader {
                 (pixels_image, indices_image, size.x * size.y * 8)
             };
 
-            let flags = match load_settings.vertex_mode {
-                ImposterVertexMode::Billboard => 4,
-                ImposterVertexMode::NoBillboard => 0,
-            } + match load_settings.multisample {
+            let flags = match load_settings.multisample {
                 true => RENDER_MULTISAMPLE_FLAG,
-                false => 0,
-            } + match load_settings.use_source_uv_y {
-                true => USE_SOURCE_UV_Y_FLAG,
                 false => 0,
             } + match mode {
                 "spherical" => GridMode::Spherical,
@@ -258,9 +237,6 @@ impl AssetLoader for ImposterLoader {
                 },
                 pixels: pixels_image,
                 indices: indices_image,
-                // base_size: size.x * size.y * 8,
-                // compressed_size: size.x * size.y * if use_u16 { 1 } else { 2 }
-                //     + pixels_x * pixels_y * 8,
                 alpha_mode,
                 vram_bytes: vram_bytes as usize,
             })

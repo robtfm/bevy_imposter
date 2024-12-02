@@ -48,6 +48,7 @@ fn vertex(vertex: Vertex) -> ImposterVertexOut {
     ));
     out.world_position = imposter_world_position + (vertex.position * scale * 2.0) * view_matrix;
 
+#ifndef VIEW_PROJECTION_ORTHOGRAPHIC
     // project the actual frag position to the furthest of the front plane of the imposter, and the camera near plane * 0.9
     let ray_direction = normalize(camera_world_position - out.world_position);
     let plane_normal = direction_view_to_world(vec3<f32>(0.0, 0.0, 1.0));
@@ -61,7 +62,10 @@ fn vertex(vertex: Vertex) -> ImposterVertexOut {
     let plane_distance = min(camera_near_plane_distance * 0.9, imposter_front_plane_distance);
 
     let point_on_plane = out.world_position + plane_distance * 1.0 * ray_direction;
-
     out.position = position_world_to_clip(point_on_plane);
+#else
+    out.position = position_world_to_clip(out.world_position);
+#endif
+
     return out;
 }

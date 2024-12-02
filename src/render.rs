@@ -18,8 +18,6 @@ pub const FRAGMENT_HANDLE: Handle<Shader> = Handle::weak_from_u128(6561264825804
 pub const SHARED_HANDLE: Handle<Shader> = Handle::weak_from_u128(699899997614446892);
 pub const VERTEX_HANDLE: Handle<Shader> = Handle::weak_from_u128(591046068481766317);
 
-pub const VERTEX_BILLBOARD_FLAG: u32 = 4;
-pub const USE_SOURCE_UV_Y_FLAG: u32 = 8;
 pub const RENDER_MULTISAMPLE_FLAG: u32 = 16;
 pub const INDEXED_FLAG: u32 = 32;
 
@@ -88,9 +86,7 @@ impl ImposterData {
         packed_tile_offset: UVec2,
         packed_tile_size: UVec2,
         mode: GridMode,
-        billboard_vertices: bool,
         multisample: bool,
-        use_mesh_uv_y: bool,
         indexed: bool,
         alpha: f32,
     ) -> Self {
@@ -101,18 +97,8 @@ impl ImposterData {
             packed_tile_offset,
             packed_tile_size,
             flags: mode.as_flags()
-                + if billboard_vertices {
-                    VERTEX_BILLBOARD_FLAG
-                } else {
-                    0
-                }
                 + if multisample {
                     RENDER_MULTISAMPLE_FLAG
-                } else {
-                    0
-                }
-                + if use_mesh_uv_y {
-                    USE_SOURCE_UV_Y_FLAG
                 } else {
                     0
                 }
@@ -178,13 +164,6 @@ impl Material for Imposter {
 
         if (key.bind_group_data.0 & RENDER_MULTISAMPLE_FLAG) != 0 {
             frag_defs.push("MATERIAL_MULTISAMPLE".into());
-        }
-        if (key.bind_group_data.0 & VERTEX_BILLBOARD_FLAG) != 0 {
-            vert_defs.push("VERTEX_BILLBOARD".into());
-        }
-        if (key.bind_group_data.0 & USE_SOURCE_UV_Y_FLAG) != 0 {
-            vert_defs.push("USE_SOURCE_UV_Y".into());
-            frag_defs.push("USE_SOURCE_UV_Y".into());
         }
         let grid_mode = match key.bind_group_data.0 & GRID_MASK {
             i if i == GridMode::Hemispherical.as_flags() => "GRID_HEMISPHERICAL",
