@@ -7,7 +7,7 @@ use std::{
 
 use anyhow::anyhow;
 use bevy::{
-    asset::{AssetLoader, AsyncReadExt},
+    asset::{io::Reader, AssetLoader},
     log::{debug, info},
     math::{UVec2, Vec3},
     prelude::{AlphaMode, Image},
@@ -52,194 +52,189 @@ impl AssetLoader for ImposterLoader {
 
     type Error = anyhow::Error;
 
-    fn load<'a>(
-        &'a self,
-        reader: &'a mut bevy::asset::io::Reader,
-        load_settings: &'a Self::Settings,
-        load_context: &'a mut bevy::asset::LoadContext,
-    ) -> impl bevy::utils::ConditionalSendFuture<Output = Result<Self::Asset, Self::Error>> {
-        Box::pin(async move {
-            let mut bytes = Vec::new();
-            reader
-                .read_to_end(&mut bytes)
-                .await
-                .map_err(|_| anyhow!("read failed"))?;
-            let cursor = Cursor::new(&bytes[..]);
-            let mut zip = zip::ZipArchive::new(cursor)?;
-            let settings = zip
-                .by_name("settings.txt")?
+    async fn load(
+        &self,
+        reader: &mut dyn Reader,
+        load_settings: &Self::Settings,
+        load_context: &mut bevy::asset::LoadContext<'_>,
+    ) -> Result<Self::Asset, Self::Error> {
+        let mut bytes = Vec::new();
+        reader
+            .read_to_end(&mut bytes)
+            .await
+            .map_err(|_| anyhow!("read failed"))?;
+        let cursor = Cursor::new(&bytes[..]);
+        let mut zip = zip::ZipArchive::new(cursor)?;
+        let settings = zip
+            .by_name("settings.txt")?
+            .bytes()
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut parts = str::from_utf8(&settings)?.split(' ');
+        let (
+            Some(grid_size),
+            Some(scale),
+            Some(mode),
+            Some(base_tile_size),
+            Some(packed_offset_x),
+            Some(packed_offset_y),
+            Some(packed_size_x),
+            Some(packed_size_y),
+        ) = (
+            parts.next(),
+            parts.next(),
+            parts.next(),
+            parts.next(),
+            parts.next(),
+            parts.next(),
+            parts.next(),
+            parts.next(),
+        )
+        else {
+            anyhow::bail!("bad format for settings: `{:?}`", settings);
+        };
+        let grid_size = grid_size.parse()?;
+        let scale = scale.parse()?;
+        let base_tile_size = base_tile_size.parse()?;
+        let packed_tile_offset = UVec2::new(packed_offset_x.parse()?, packed_offset_y.parse()?);
+        let packed_tile_size = UVec2::new(packed_size_x.parse()?, packed_size_y.parse()?);
+
+        let is_indexed = zip.file_names().any(|n| n == "pixels.png");
+        let (pixels_image, indices_image, vram_bytes) = if is_indexed {
+            let raw_pixels = zip
+                .by_name("pixels.png")?
                 .bytes()
                 .collect::<Result<Vec<_>, _>>()?;
-            let mut parts = str::from_utf8(&settings)?.split(' ');
-            let (
-                Some(grid_size),
-                Some(scale),
-                Some(mode),
-                Some(base_tile_size),
-                Some(packed_offset_x),
-                Some(packed_offset_y),
-                Some(packed_size_x),
-                Some(packed_size_y),
-            ) = (
-                parts.next(),
-                parts.next(),
-                parts.next(),
-                parts.next(),
-                parts.next(),
-                parts.next(),
-                parts.next(),
-                parts.next(),
-            )
-            else {
-                anyhow::bail!("bad format for settings: `{:?}`", settings);
-            };
-            let grid_size = grid_size.parse()?;
-            let scale = scale.parse()?;
-            let base_tile_size = base_tile_size.parse()?;
-            let packed_tile_offset = UVec2::new(packed_offset_x.parse()?, packed_offset_y.parse()?);
-            let packed_tile_size = UVec2::new(packed_size_x.parse()?, packed_size_y.parse()?);
+            let mut reader = image::ImageReader::new(std::io::Cursor::new(raw_pixels));
+            reader.set_format(image::ImageFormat::Png);
+            reader.no_limits();
+            let pixels_bytes = reader.decode()?.into_bytes();
+            let pixels_x = (pixels_bytes.len() as f32 / 8.0).sqrt().ceil() as u32;
+            let pixels_y = (pixels_bytes.len() as f32 / (8 * pixels_x) as f32).ceil() as u32;
+            let pixels_image = Image::new(
+                Extent3d {
+                    width: pixels_x,
+                    height: pixels_y,
+                    depth_or_array_layers: 1,
+                },
+                wgpu::TextureDimension::D2,
+                pixels_bytes,
+                TextureFormat::Rg32Uint,
+                RenderAssetUsages::RENDER_WORLD,
+            );
+            let pixels_image = load_context.add_labeled_asset("pixels".to_owned(), pixels_image);
 
-            let is_indexed = zip.file_names().any(|n| n == "pixels.png");
-            let (pixels_image, indices_image, vram_bytes) = if is_indexed {
-                let raw_pixels = zip
-                    .by_name("pixels.png")?
-                    .bytes()
-                    .collect::<Result<Vec<_>, _>>()?;
-                let mut reader = image::ImageReader::new(std::io::Cursor::new(raw_pixels));
-                reader.set_format(image::ImageFormat::Png);
-                reader.no_limits();
-                let pixels_bytes = reader.decode()?.into_bytes();
-                let pixels_x = (pixels_bytes.len() as f32 / 8.0).sqrt().ceil() as u32;
-                let pixels_y = (pixels_bytes.len() as f32 / (8 * pixels_x) as f32).ceil() as u32;
-                let pixels_image = Image::new(
-                    Extent3d {
-                        width: pixels_x,
-                        height: pixels_y,
-                        depth_or_array_layers: 1,
-                    },
-                    wgpu::TextureDimension::D2,
-                    pixels_bytes,
-                    TextureFormat::Rg32Uint,
-                    RenderAssetUsages::RENDER_WORLD,
-                );
-                let pixels_image =
-                    load_context.add_labeled_asset("pixels".to_owned(), pixels_image);
+            let raw_indices = zip
+                .by_name("indices.png")?
+                .bytes()
+                .collect::<Result<Vec<_>, _>>()?;
+            let mut reader = image::ImageReader::new(std::io::Cursor::new(raw_indices));
+            reader.set_format(image::ImageFormat::Png);
+            reader.no_limits();
+            let indices_bytes = reader.decode()?.into_bytes();
 
-                let raw_indices = zip
-                    .by_name("indices.png")?
-                    .bytes()
-                    .collect::<Result<Vec<_>, _>>()?;
-                let mut reader = image::ImageReader::new(std::io::Cursor::new(raw_indices));
-                reader.set_format(image::ImageFormat::Png);
-                reader.no_limits();
-                let indices_bytes = reader.decode()?.into_bytes();
+            let use_u16 = pixels_x * pixels_y < 65536;
 
-                let use_u16 = pixels_x * pixels_y < 65536;
-
-                let size: UVec2 = packed_tile_size * grid_size;
-                let width = if use_u16 { (size.x + 1) / 2 } else { size.x };
-                debug!(
-                    "load use_u16? {use_u16}, base size: {}, use size: {}, height: {}, total pix: {}",
-                    size.x,
+            let size: UVec2 = packed_tile_size * grid_size;
+            let width = if use_u16 { (size.x + 1) / 2 } else { size.x };
+            debug!(
+                "load use_u16? {use_u16}, base size: {}, use size: {}, height: {}, total pix: {}",
+                size.x,
+                width,
+                size.y,
+                indices_bytes.len()
+            );
+            let indices_image = Image::new(
+                Extent3d {
                     width,
-                    size.y,
-                    indices_bytes.len()
-                );
-                let indices_image = Image::new(
+                    height: size.y,
+                    depth_or_array_layers: 1,
+                },
+                wgpu::TextureDimension::D2,
+                indices_bytes,
+                TextureFormat::R32Uint,
+                RenderAssetUsages::RENDER_WORLD,
+            );
+            let indices_image = load_context.add_labeled_asset("indices".to_owned(), indices_image);
+            (
+                pixels_image,
+                indices_image,
+                pixels_x * pixels_y * 8 + width * size.y * 4,
+            )
+        } else {
+            let raw_image = zip
+                .by_name("texture.png")?
+                .bytes()
+                .collect::<Result<Vec<_>, _>>()?;
+            let mut reader = image::ImageReader::new(std::io::Cursor::new(raw_image));
+            reader.set_format(image::ImageFormat::Png);
+            reader.no_limits();
+            let pixels_bytes = reader.decode()?.into_bytes();
+            let size: UVec2 = packed_tile_size * grid_size;
+            let pixels_image = Image::new(
+                Extent3d {
+                    width: size.x,
+                    height: size.y,
+                    depth_or_array_layers: 1,
+                },
+                wgpu::TextureDimension::D2,
+                pixels_bytes,
+                TextureFormat::Rg32Uint,
+                RenderAssetUsages::RENDER_WORLD,
+            );
+            let pixels_image = load_context.add_labeled_asset("texture".to_owned(), pixels_image);
+
+            let indices_image = load_context.add_labeled_asset(
+                "dummy_indices".to_owned(),
+                Image::new(
                     Extent3d {
-                        width,
-                        height: size.y,
+                        width: 1,
+                        height: 1,
                         depth_or_array_layers: 1,
                     },
                     wgpu::TextureDimension::D2,
-                    indices_bytes,
+                    vec![0, 0, 0, 0],
                     TextureFormat::R32Uint,
                     RenderAssetUsages::RENDER_WORLD,
-                );
-                let indices_image =
-                    load_context.add_labeled_asset("indices".to_owned(), indices_image);
-                (
-                    pixels_image,
-                    indices_image,
-                    pixels_x * pixels_y * 8 + width * size.y * 4,
-                )
-            } else {
-                let raw_image = zip
-                    .by_name("texture.png")?
-                    .bytes()
-                    .collect::<Result<Vec<_>, _>>()?;
-                let mut reader = image::ImageReader::new(std::io::Cursor::new(raw_image));
-                reader.set_format(image::ImageFormat::Png);
-                reader.no_limits();
-                let pixels_bytes = reader.decode()?.into_bytes();
-                let size: UVec2 = packed_tile_size * grid_size;
-                let pixels_image = Image::new(
-                    Extent3d {
-                        width: size.x,
-                        height: size.y,
-                        depth_or_array_layers: 1,
-                    },
-                    wgpu::TextureDimension::D2,
-                    pixels_bytes,
-                    TextureFormat::Rg32Uint,
-                    RenderAssetUsages::RENDER_WORLD,
-                );
-                let pixels_image =
-                    load_context.add_labeled_asset("texture".to_owned(), pixels_image);
+                ),
+            );
 
-                let indices_image = load_context.add_labeled_asset(
-                    "dummy_indices".to_owned(),
-                    Image::new(
-                        Extent3d {
-                            width: 1,
-                            height: 1,
-                            depth_or_array_layers: 1,
-                        },
-                        wgpu::TextureDimension::D2,
-                        vec![0, 0, 0, 0],
-                        TextureFormat::R32Uint,
-                        RenderAssetUsages::RENDER_WORLD,
-                    ),
-                );
+            (pixels_image, indices_image, size.x * size.y * 8)
+        };
 
-                (pixels_image, indices_image, size.x * size.y * 8)
-            };
+        let flags = match load_settings.multisample {
+            true => RENDER_MULTISAMPLE_FLAG,
+            false => 0,
+        } + match mode {
+            "spherical" => GridMode::Spherical,
+            "hemispherical" => GridMode::Hemispherical,
+            "Horizontal" => GridMode::Horizontal,
+            _ => anyhow::bail!("bad mode `{}`", mode),
+        }
+        .as_flags()
+            + if is_indexed { INDEXED_FLAG } else { 0 };
 
-            let flags = match load_settings.multisample {
-                true => RENDER_MULTISAMPLE_FLAG,
-                false => 0,
-            } + match mode {
-                "spherical" => GridMode::Spherical,
-                "hemispherical" => GridMode::Hemispherical,
-                "Horizontal" => GridMode::Horizontal,
-                _ => anyhow::bail!("bad mode `{}`", mode),
-            }
-            .as_flags()
-                + if is_indexed { INDEXED_FLAG } else { 0 };
+        let alpha_mode = if load_settings.alpha_blend == 0.0 {
+            AlphaMode::Blend
+        } else if load_settings.alpha_blend == 1.0 {
+            AlphaMode::Opaque
+        } else {
+            AlphaMode::Mask(load_settings.alpha_blend)
+        };
 
-            let alpha_mode = if load_settings.alpha_blend == 0.0 {
-                AlphaMode::Blend
-            } else if load_settings.alpha_blend == 1.0 {
-                AlphaMode::Opaque
-            } else {
-                AlphaMode::Mask(load_settings.alpha_blend)
-            };
-
-            Ok(Imposter {
-                data: ImposterData {
-                    center_and_scale: Vec3::ZERO.extend(scale),
-                    grid_size,
-                    flags,
-                    alpha: load_settings.alpha,
-                    base_tile_size,
-                    packed_tile_offset,
-                    packed_tile_size,
-                },
-                pixels: pixels_image,
-                indices: indices_image,
-                alpha_mode,
-                vram_bytes: vram_bytes as usize,
-            })
+        Ok(Imposter {
+            data: ImposterData {
+                center_and_scale: Vec3::ZERO.extend(scale),
+                grid_size,
+                flags,
+                alpha: load_settings.alpha,
+                base_tile_size,
+                packed_tile_offset,
+                packed_tile_size,
+            },
+            pixels: pixels_image,
+            indices: indices_image,
+            alpha_mode,
+            vram_bytes: vram_bytes as usize,
         })
     }
 

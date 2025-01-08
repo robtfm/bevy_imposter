@@ -2,7 +2,10 @@
 boimp is the sound a mesh makes when its lods pop. it's also a library for octahedral imposters in bevy.
 
 # versions
-version 0.1.0 requires a slightly modified bevy 0.14.2 (see [cargo.toml](Cargo.toml)).
+| boimp | bevy | note |
+| --- | --- | --- |
+| 0.1.0 | 0.14 | requires a slightly modified bevy 0.14.2 (see cargo.toml) |
+| 0.2.0 | 0.15 | |
 
 # bake
 generate an imposter with an `ImposterBakeBundle`, specifying the image size, grid count, multisampling and grid mode (spherical / hemispherical / horizontal).
@@ -71,14 +74,19 @@ args:
 - `--source <path>` : gltf to load (default "assets/boimps/output.boimp")
 - `--multisample` : average samples over nearby material pixels when rendering imposters (default false)
 
+# known issues
+
+non-opaque materials aren't well supported. a single alpha-blend texture will work fine but multiple overlapping texture layers will take only the alpha of the front-most layer.
 
 # todo
-- integrate with visibility ranges
-- improve asset format
-- maybe store/adjust for depths
-- maybe make the storage more configurable maybe - currently 5bit/channel color and alpha, 6bit metallic and roughness, 24bit normal, 8bit flags (only unlit flag currently passed)
-- maybe add "image" mode that records the actual view rather than the material properties
-- update to 0.15 and upstream
+- [ ] integrate with visibility ranges
+- [ ] improve asset format
+- [x] store/adjust for depths
+- [ ] maybe make the storage more configurable maybe - currently 5bit/channel color and alpha, 4bit metallic and roughness, 4bit flags (only unlit flag currently passed), 24bit normal, 8bit depth
+- [ ] maybe add "image" mode that records the actual view rather than the material properties
+- [x] update to 0.15 and upstream
+- [ ] fix alpha issues
+- [ ] use vertex instancing to avoid needing a mesh
 
 ## License
 

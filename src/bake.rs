@@ -15,6 +15,7 @@ use bevy::{
         prepass::OpaqueNoLightmap3dBinKey,
     },
     ecs::{entity::EntityHashSet, query::QueryFilter, system::lifetimeless::SRes},
+    image::{ImageSampler, TextureFormatPixelInfo},
     pbr::{
         alpha_mode_pipeline_key, graph::NodePbr, prepare_preprocess_bind_groups, DrawMesh,
         ExtendedMaterial, GpuPreprocessNode, MaterialExtension, MaterialPipelineKey, MeshPipeline,
@@ -27,7 +28,7 @@ use bevy::{
         camera::{
             CameraOutputMode, CameraProjection, CameraRenderGraph, ExtractedCamera, ScalingMode,
         },
-        mesh::GpuMesh,
+        mesh::RenderMesh,
         primitives::{Aabb, Sphere},
         render_asset::{prepare_assets, RenderAssetUsages, RenderAssets},
         render_graph::{RenderGraphApp, RenderLabel, RenderSubGraph, ViewNode, ViewNodeRunner},
@@ -48,10 +49,11 @@ use bevy::{
             TextureFormat, TextureUsages, UniformBuffer,
         },
         renderer::{RenderDevice, RenderQueue},
-        texture::{ColorAttachment, GpuImage, ImageSampler, TextureCache, TextureFormatPixelInfo},
+        sync_world::{MainEntity, RenderEntity, SyncToRenderWorld, TemporaryRenderEntity},
+        texture::{ColorAttachment, GpuImage, TextureCache},
         view::{
-            ColorGrading, ExtractedView, NoFrustumCulling, RenderLayers, ViewDepthTexture,
-            ViewUniformOffset, VisibilitySystems, VisibleEntities, WithMesh,
+            ColorGrading, ExtractedView, NoFrustumCulling, RenderLayers, RenderVisibleEntities,
+            ViewDepthTexture, ViewUniformOffset, VisibilitySystems, VisibleEntities,
         },
         Extract, Render, RenderApp, RenderSet,
     },
@@ -115,7 +117,8 @@ impl Plugin for ImposterBakePlugin {
         app.add_systems(
             PostUpdate,
             (
-                check_imposter_visibility::<WithMesh>.in_set(VisibilitySystems::CheckVisibility),
+                check_imposter_visibility::<With<Mesh3d>>
+                    .in_set(VisibilitySystems::CheckVisibility),
                 check_finished_cameras,
             ),
         );
@@ -215,7 +218,7 @@ where
     fn build(&self, app: &mut App) {
         app.add_systems(
             PostUpdate,
-            count_expected_imposter_materials::<M>.after(check_imposter_visibility::<WithMesh>),
+            count_expected_imposter_materials::<M>.after(check_imposter_visibility::<With<Mesh3d>>),
         );
     }
 
@@ -255,6 +258,14 @@ pub enum BakeState {
 }
 
 #[derive(Component, Clone)]
+#[require(
+    CameraRenderGraph(|| CameraRenderGraph::new(ImposterBakeGraph)),
+    VisibleEntities,
+    ImposterExpectedRenderCount,
+    Transform,
+    ImposterBakeCompleteChannel,
+    SyncToRenderWorld
+)]
 pub struct ImposterBakeCamera {
     // area to capture
     pub radius: f32,
@@ -399,31 +410,6 @@ impl Default for ImposterBakeCompleteChannel {
     }
 }
 
-#[derive(Bundle)]
-pub struct ImposterBakeBundle {
-    pub camera: ImposterBakeCamera,
-    pub graph: CameraRenderGraph,
-    pub visible_entities: VisibleEntities,
-    pub expected_count: ImposterExpectedRenderCount,
-    pub transform: Transform,
-    pub global_transform: GlobalTransform,
-    pub complete: ImposterBakeCompleteChannel,
-}
-
-impl Default for ImposterBakeBundle {
-    fn default() -> Self {
-        Self {
-            camera: Default::default(),
-            graph: CameraRenderGraph::new(ImposterBakeGraph),
-            expected_count: Default::default(),
-            visible_entities: Default::default(),
-            transform: Default::default(),
-            global_transform: Default::default(),
-            complete: Default::default(),
-        }
-    }
-}
-
 #[derive(Resource, Default)]
 pub struct PartBaked(Arc<Mutex<HashMap<Entity, usize>>>);
 
@@ -524,11 +510,11 @@ pub fn check_imposter_visibility<QF>(
 #[allow(clippy::type_complexity)]
 fn count_expected_imposter_materials<M: ImposterBakeMaterial>(
     mut q: Query<(&mut ImposterExpectedRenderCount, &VisibleEntities), With<ImposterBakeCamera>>,
-    materials: Query<(), (With<Handle<M>>, With<Handle<Mesh>>)>,
+    materials: Query<(), (With<MeshMaterial3d<M>>, With<Mesh3d>)>,
 ) {
     for (mut count, visible_entities) in q.iter_mut() {
         let material_count = visible_entities
-            .iter::<WithMesh>()
+            .iter::<With<Mesh3d>>()
             .filter(|e| materials.get(**e).is_ok())
             .count();
         count.0 += material_count;
@@ -568,9 +554,15 @@ impl<T: SortedPhaseItem> SortedPhaseItem for ImposterPhaseItem<T> {
 }
 
 impl<T: PhaseItem> PhaseItem for ImposterPhaseItem<T> {
+    const AUTOMATIC_BATCHING: bool = T::AUTOMATIC_BATCHING;
+
     #[inline]
     fn entity(&self) -> Entity {
         self.inner.entity()
+    }
+
+    fn main_entity(&self) -> MainEntity {
+        self.inner.main_entity()
     }
 
     #[inline]
@@ -605,7 +597,7 @@ impl<T: BinnedPhaseItem> BinnedPhaseItem for ImposterPhaseItem<T> {
     #[inline]
     fn new(
         key: Self::BinKey,
-        representative_entity: Entity,
+        representative_entity: (Entity, MainEntity),
         batch_range: Range<u32>,
         extra_index: PhaseItemExtraIndex,
     ) -> Self {
@@ -669,7 +661,7 @@ impl Default for ImpostersBaked {
     }
 }
 
-#[allow(clippy::type_complexity)]
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub fn extract_imposter_cameras(
     mut commands: Commands,
     mut opaque: ResMut<ViewBinnedRenderPhases<ImposterPhaseItem<Opaque3d>>>,
@@ -678,45 +670,62 @@ pub fn extract_imposter_cameras(
     part_baked: Res<PartBaked>,
     cameras: Extract<
         Query<(
-            Entity,
-            &ImposterBakeCamera,
+            RenderEntity,
+            Ref<ImposterBakeCamera>,
             &ImposterBakeCompleteChannel,
             &ImposterExpectedRenderCount,
-            &GlobalTransform,
+            Ref<GlobalTransform>,
             &VisibleEntities,
         )>,
     >,
+    mapper: Extract<Query<&RenderEntity>>,
+    mut subview_cache: Local<HashMap<Entity, Vec<(u32, u32, Entity)>>>,
 ) {
     let mut entities = EntityHashSet::default();
+    let mut prev_cache = std::mem::take(&mut *subview_cache);
 
     for (entity, camera, channel, expected_count, gt, visible_entities) in cameras.iter() {
         if camera.state != BakeState::Rendering
             || !channel.receiver.as_ref().map_or(true, |r| r.is_empty())
         {
+            commands.entity(entity).remove::<(
+                ExtractedImposterBakeCamera,
+                ExtractedView,
+                RenderVisibleEntities,
+                ViewUniformOffset,
+            )>();
             continue;
         }
-        debug!("extract");
+
         opaque.insert_or_clear(entity);
         alphamask.insert_or_clear(entity);
         transparent.insert_or_clear(entity);
         entities.insert(entity);
 
-        let center = gt.translation();
-        let mut subviews = Vec::default();
-        let mut projection = OrthographicProjection {
-            far: camera.radius * 2.0,
-            scaling_mode: ScalingMode::Fixed {
-                width: camera.radius * 2.0,
-                height: camera.radius * 2.0,
-            },
-            ..Default::default()
+        let subviews = if !camera.is_changed() && !gt.is_changed() {
+            prev_cache.remove(&entity)
+        } else {
+            None
         };
-        projection.update(0.0, 0.0);
-        let clip_from_view = projection.get_clip_from_view();
-        for y in 0..camera.grid_size {
-            for x in 0..camera.grid_size {
-                let camera_transform =
-                    if let Some(camera_transforms) = camera.manual_camera_transforms.as_ref() {
+
+        let subviews = subviews.unwrap_or_else(|| {
+            let center = gt.translation();
+            let mut subviews = Vec::default();
+            let mut projection = OrthographicProjection {
+                far: camera.radius * 2.0,
+                scaling_mode: ScalingMode::Fixed {
+                    width: camera.radius * 2.0,
+                    height: camera.radius * 2.0,
+                },
+                ..OrthographicProjection::default_3d()
+            };
+            projection.update(0.0, 0.0);
+            let clip_from_view = projection.get_clip_from_view();
+            for y in 0..camera.grid_size {
+                for x in 0..camera.grid_size {
+                    let camera_transform = if let Some(camera_transforms) =
+                        camera.manual_camera_transforms.as_ref()
+                    {
                         *camera_transforms
                             .get((y * camera.grid_size + x) as usize)
                             .expect("not enough manual camera transforms")
@@ -729,27 +738,54 @@ pub fn extract_imposter_cameras(
                         )
                     };
 
-                let view = ExtractedView {
-                    clip_from_view,
-                    world_from_view: camera_transform,
-                    clip_from_world: None,
-                    hdr: false,
-                    viewport: UVec4::new(
-                        0,
-                        0,
-                        camera.tile_size * camera.grid_size,
-                        camera.tile_size * camera.grid_size,
-                    ),
-                    color_grading: ColorGrading::default(),
-                };
+                    let view = ExtractedView {
+                        clip_from_view,
+                        world_from_view: camera_transform,
+                        clip_from_world: None,
+                        hdr: false,
+                        viewport: UVec4::new(
+                            0,
+                            0,
+                            camera.tile_size * camera.grid_size,
+                            camera.tile_size * camera.grid_size,
+                        ),
+                        color_grading: ColorGrading::default(),
+                    };
 
-                let id = commands.spawn(view).id();
+                    let id = commands.spawn(view).id();
 
-                subviews.push((x, y, id));
+                    subviews.push((x, y, id));
+                }
             }
-        }
 
-        commands.get_or_spawn(entity).insert((
+            subviews
+        });
+
+        subview_cache.insert(entity, subviews.clone());
+
+        let render_visible_entities = RenderVisibleEntities {
+            entities: visible_entities
+                .entities
+                .iter()
+                .map(|(type_id, entities)| {
+                    let entities = entities
+                        .iter()
+                        .map(|entity| {
+                            let render_entity = mapper
+                                .get(*entity)
+                                .cloned()
+                                .map(|entity| entity.id())
+                                .unwrap_or_else(|_e| commands.spawn(TemporaryRenderEntity).id());
+                            (render_entity, (*entity).into())
+                        })
+                        .collect();
+                    (*type_id, entities)
+                })
+                .collect(),
+        };
+
+        commands.entity(entity).insert((
+            render_visible_entities,
             ExtractedImposterBakeCamera {
                 grid_size: camera.grid_size,
                 tile_size: camera.tile_size,
@@ -776,7 +812,15 @@ pub fn extract_imposter_cameras(
                 exposure: 0.0,
                 hdr: false,
             },
-            visible_entities.clone(),
+            // necessary to get batch_and_prepare_binned_render_phase to run
+            ExtractedView {
+                clip_from_view: Default::default(),
+                world_from_view: Default::default(),
+                clip_from_world: Default::default(),
+                hdr: Default::default(),
+                viewport: Default::default(),
+                color_grading: Default::default(),
+            },
             // we must add this to get the gpu mesh uniform system to pick up the view and generate mesh uniforms for us
             // value doesn't matter as we won't render using this view
             ViewUniformOffset { offset: u32::MAX },
@@ -791,6 +835,12 @@ pub fn extract_imposter_cameras(
         .lock()
         .unwrap()
         .retain(|entity, _| entities.contains(entity));
+
+    for (_, subviews) in prev_cache.drain() {
+        for (_, _, ent) in subviews.into_iter() {
+            commands.entity(ent).despawn_recursive();
+        }
+    }
 }
 
 fn copy_preprocess_bindgroups(
@@ -963,6 +1013,7 @@ impl FromWorld for ImposterBlitPipeline {
             push_constant_ranges: Default::default(),
             primitive: Default::default(),
             multisample: Default::default(),
+            zero_initialize_workgroup_memory: false,
         });
 
         Self { layout, pipeline }
@@ -1107,14 +1158,14 @@ pub fn queue_imposter_material_meshes<M: ImposterBakeMaterial>(
     opaque_draw_functions: Res<DrawFunctions<ImposterPhaseItem<Opaque3d>>>,
     alphamask_draw_functions: Res<DrawFunctions<ImposterPhaseItem<AlphaMask3d>>>,
     transparent_draw_functions: Res<DrawFunctions<ImposterPhaseItem<Transparent3d>>>,
-    mut views: Query<(Entity, &VisibleEntities), With<ExtractedImposterBakeCamera>>,
+    mut views: Query<(Entity, &RenderVisibleEntities), With<ExtractedImposterBakeCamera>>,
     mut opaque_render_phases: ResMut<ViewBinnedRenderPhases<ImposterPhaseItem<Opaque3d>>>,
     mut alphamask_render_phases: ResMut<ViewBinnedRenderPhases<ImposterPhaseItem<AlphaMask3d>>>,
     mut transparent_render_phases: ResMut<ViewSortedRenderPhases<ImposterPhaseItem<Transparent3d>>>,
     imposter_pipeline: Res<ImposterBakePipeline<M>>,
     mut pipelines: ResMut<SpecializedMeshPipelines<ImposterBakePipeline<M>>>,
     pipeline_cache: Res<PipelineCache>,
-    render_meshes: Res<RenderAssets<GpuMesh>>,
+    render_meshes: Res<RenderAssets<RenderMesh>>,
     render_mesh_instances: Res<RenderMeshInstances>,
     render_materials: Res<RenderAssets<PreparedMaterial<M>>>,
     render_material_instances: Res<RenderMaterialInstances<M>>,
@@ -1146,7 +1197,7 @@ pub fn queue_imposter_material_meshes<M: ImposterBakeMaterial>(
 
         let view_key = MeshPipelineKey::from_msaa_samples(1);
 
-        for visible_entity in visible_entities.iter::<WithMesh>() {
+        for (render_entity, visible_entity) in visible_entities.iter::<With<Mesh3d>>() {
             let Some(material_asset_id) = render_material_instances.get(visible_entity) else {
                 continue;
             };
@@ -1206,9 +1257,9 @@ pub fn queue_imposter_material_meshes<M: ImposterBakeMaterial>(
                             pipeline: pipeline_id,
                             asset_id: mesh_instance.mesh_asset_id.into(),
                             material_bind_group_id: material.get_bind_group_id().0,
-                            lightmap_image: None, // can't check the mesh bit
+                            lightmap_image: None, // can't check the mesh bit, don't think we should anyway
                         },
-                        *visible_entity,
+                        (*render_entity, *visible_entity),
                         BinnedRenderPhaseType::mesh(mesh_instance.should_batch()),
                     );
                 }
@@ -1221,14 +1272,14 @@ pub fn queue_imposter_material_meshes<M: ImposterBakeMaterial>(
                             asset_id: mesh_instance.mesh_asset_id.into(),
                             material_bind_group_id: material.get_bind_group_id().0,
                         },
-                        *visible_entity,
+                        (*render_entity, *visible_entity),
                         BinnedRenderPhaseType::mesh(mesh_instance.should_batch()),
                     );
                 }
                 _ => {
                     transparent_phase.add(ImposterPhaseItem {
                         inner: Transparent3d {
-                            entity: *visible_entity,
+                            entity: (*render_entity, *visible_entity),
                             draw_function: transparent_draw,
                             pipeline: pipeline_id,
                             // since we share the mesh bindgroup this will be wrong for some views whatever we use.
@@ -1333,13 +1384,20 @@ impl ViewNode for ImposterBakeNode {
                     // we use the batch from the dummy main view, which means items will be rendered potentially out of order
                     // TODO: see if it's worth binning for every individual view separately. since this is baking, probably not for opaque.
                     // if we use it for dynamic imposters in future there'd only be a single view being rendered anyway
-                    opaque_phase.render(&mut render_pass, world, camera.subviews[0].2);
-                    alphamask_phase.render(&mut render_pass, world, camera.subviews[0].2);
-                    transparent_phase.render(&mut render_pass, world, camera.subviews[0].2);
+                    let mut ok = true;
+                    ok &= opaque_phase
+                        .render(&mut render_pass, world, camera.subviews[0].2)
+                        .is_ok();
+                    ok &= alphamask_phase
+                        .render(&mut render_pass, world, camera.subviews[0].2)
+                        .is_ok();
+                    ok &= transparent_phase
+                        .render(&mut render_pass, world, camera.subviews[0].2)
+                        .is_ok();
 
                     let actual = *actual.0.lock().unwrap();
 
-                    if actual != camera.expected_count && camera.wait_for_render {
+                    if (!ok || (actual != camera.expected_count)) && camera.wait_for_render {
                         debug!("not ready: {}/{}", actual, camera.expected_count);
                     } else {
                         rendered += 1;
@@ -1361,9 +1419,9 @@ impl ViewNode for ImposterBakeNode {
                             0.0,
                             1.0,
                         );
-                        opaque_phase.render(&mut render_pass, world, *view);
-                        alphamask_phase.render(&mut render_pass, world, *view);
-                        transparent_phase.render(&mut render_pass, world, *view);
+                        let _ = opaque_phase.render(&mut render_pass, world, *view);
+                        let _ = alphamask_phase.render(&mut render_pass, world, *view);
+                        let _ = transparent_phase.render(&mut render_pass, world, *view);
                         rendered += 1;
                     }
                 }
@@ -1394,13 +1452,18 @@ impl ViewNode for ImposterBakeNode {
                         occlusion_query_set: None,
                     });
                     let mut render_pass = TrackedRenderPass::new(&render_device, render_pass);
-                    opaque_phase.render(&mut render_pass, world, *view);
-                    alphamask_phase.render(&mut render_pass, world, *view);
-                    transparent_phase.render(&mut render_pass, world, *view);
+                    let mut ok = true;
+                    ok &= opaque_phase.render(&mut render_pass, world, *view).is_ok();
+                    ok &= alphamask_phase
+                        .render(&mut render_pass, world, *view)
+                        .is_ok();
+                    ok &= transparent_phase
+                        .render(&mut render_pass, world, *view)
+                        .is_ok();
 
                     if rendered == 0 {
                         let actual = *actual.0.lock().unwrap();
-                        let success = actual == camera.expected_count;
+                        let success = ok && (actual == camera.expected_count);
 
                         if !success {
                             debug!("not ready: {}/{}", actual, camera.expected_count);

@@ -30,29 +30,30 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>, mut meshes: Res
         std::process::exit(1);
     };
 
-    commands.spawn(MaterialMeshBundle::<Imposter> {
-        mesh: meshes.add(Plane3d::new(Vec3::Z, Vec2::splat(0.5))),
-        material: asset_server.load_with_settings::<_, ImposterLoaderSettings>(source, move |s| {
-            s.multisample = multisample;
-        }),
-        ..default()
-    });
+    commands.spawn((
+        Mesh3d(meshes.add(Plane3d::new(Vec3::Z, Vec2::splat(0.5)))),
+        MeshMaterial3d(
+            asset_server.load_with_settings::<Imposter, ImposterLoaderSettings>(source, move |s| {
+                s.multisample = multisample;
+            }),
+        ),
+    ));
 
-    commands.spawn(Camera3dBundle {
-        transform: Transform::from_translation(Vec3::ONE).looking_at(Vec3::ZERO, Vec3::Y),
-        camera: Camera {
+    commands.spawn((
+        Transform::from_translation(Vec3::ONE).looking_at(Vec3::ZERO, Vec3::Y),
+        Camera3d::default(),
+        Camera {
             clear_color: ClearColorConfig::Custom(Color::srgb(0.4, 0.0, 0.4)),
             ..Default::default()
         },
-        ..Default::default()
-    });
+    ));
 
-    commands.spawn(DirectionalLightBundle::default());
+    commands.spawn(DirectionalLight::default());
 }
 
 fn set_camera_pos(
     mut commands: Commands,
-    handles: Query<&Handle<Imposter>>,
+    handles: Query<&MeshMaterial3d<Imposter>>,
     imposters: Res<Assets<Imposter>>,
     mut cam: Query<(Entity, &mut Transform), With<Camera>>,
     asset_server: Res<AssetServer>,

@@ -8,7 +8,7 @@ use bevy::{
     scene::InstanceId,
     window::ExitCondition,
 };
-use boimp::{GridMode, ImposterBakeBundle, ImposterBakeCamera, ImposterBakePlugin};
+use boimp::{GridMode, ImposterBakeCamera, ImposterBakePlugin};
 
 #[derive(Resource)]
 struct BakeSettings {
@@ -81,7 +81,7 @@ impl SceneHandle {
 
 fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
     let mut args = pico_args::Arguments::from_env();
-    let grid_size = args.value_from_str("--grid").unwrap_or(8);
+    let grid_size = args.value_from_str("--grid").unwrap_or(15);
     let tile_size = args.value_from_str("--tile").unwrap_or(128);
     let mode = match args
         .value_from_str("--mode")
@@ -142,21 +142,20 @@ fn scene_load_check(
     mut scene_spawner: ResMut<SceneSpawner>,
 ) {
     match scene_handle.instance_id {
-        None => {
-            match asset_server.load_state(&scene_handle.gltf_handle) {
-                LoadState::Loaded => {
-                    let gltf = gltf_assets.get(&scene_handle.gltf_handle).unwrap();
-                    if gltf.scenes.len() > 1 {
-                        info!(
-                            "Displaying scene {} out of {}",
-                            scene_handle.scene_index,
-                            gltf.scenes.len()
-                        );
-                        info!("You can select the scene by adding '#Scene' followed by a number to the end of the file path (e.g '#Scene1' to load the second scene).");
-                    }
+        None => match asset_server.load_state(&scene_handle.gltf_handle) {
+            LoadState::Loaded => {
+                let gltf = gltf_assets.get(&scene_handle.gltf_handle).unwrap();
+                if gltf.scenes.len() > 1 {
+                    info!(
+                        "Displaying scene {} out of {}",
+                        scene_handle.scene_index,
+                        gltf.scenes.len()
+                    );
+                    info!("You can select the scene by adding '#Scene' followed by a number to the end of the file path (e.g '#Scene1' to load the second scene).");
+                }
 
-                    let gltf_scene_handle = gltf
-                        .scenes
+                let gltf_scene_handle =
+                    gltf.scenes
                         .get(scene_handle.scene_index)
                         .unwrap_or_else(|| {
                             panic!(
@@ -164,36 +163,35 @@ fn scene_load_check(
                                 scene_handle.scene_index
                             )
                         });
-                    let scene = scenes.get_mut(gltf_scene_handle).unwrap();
+                let scene = scenes.get_mut(gltf_scene_handle).unwrap();
 
-                    let mut query = scene
-                        .world
-                        .query::<(Option<&DirectionalLight>, Option<&PointLight>)>();
-                    scene_handle.has_light = query.iter(&scene.world).any(
-                        |(maybe_directional_light, maybe_point_light)| {
+                let mut query = scene
+                    .world
+                    .query::<(Option<&DirectionalLight>, Option<&PointLight>)>();
+                scene_handle.has_light =
+                    query
+                        .iter(&scene.world)
+                        .any(|(maybe_directional_light, maybe_point_light)| {
                             maybe_directional_light.is_some() || maybe_point_light.is_some()
-                        },
-                    );
+                        });
 
-                    let root = commands
-                        .spawn(SpatialBundle {
-                            transform: Transform::from_scale(Vec3::splat(1.0)),
-                            ..Default::default()
-                        })
-                        // .insert(Rotate)
-                        .id();
-                    scene_handle.instance_id =
-                        Some(scene_spawner.spawn_as_child(gltf_scene_handle.clone_weak(), root));
+                let root = commands
+                    .spawn((
+                        Transform::from_scale(Vec3::splat(1.0)),
+                        Visibility::default(),
+                    ))
+                    .id();
+                scene_handle.instance_id =
+                    Some(scene_spawner.spawn_as_child(gltf_scene_handle.clone_weak(), root));
 
-                    info!("Spawning scene...");
-                }
-                LoadState::Failed(_) => {
-                    error!("failed to load");
-                    std::process::exit(1);
-                }
-                _ => (),
+                info!("Spawning scene...");
             }
-        }
+            LoadState::Failed(_) => {
+                error!("failed to load");
+                std::process::exit(1);
+            }
+            _ => (),
+        },
         Some(instance_id) if !scene_handle.is_loaded => {
             if scene_spawner.instance_is_ready(instance_id) {
                 info!("...done!");
@@ -208,7 +206,7 @@ fn setup_scene_after_load(
     mut commands: Commands,
     mut setup: Local<bool>,
     mut scene_handle: ResMut<SceneHandle>,
-    meshes: Query<(&GlobalTransform, Option<&Aabb>), With<Handle<Mesh>>>,
+    meshes: Query<(&GlobalTransform, Option<&Aabb>), With<Mesh3d>>,
     scene_spawner: Res<SceneSpawner>,
     settings: Res<BakeSettings>,
 ) {
@@ -273,10 +271,9 @@ fn setup_scene_after_load(
             std::process::exit(0);
         });
 
-        commands.spawn(ImposterBakeBundle {
+        commands.spawn((
             camera,
-            transform: Transform::from_translation(scene_handle.sphere.center.into()),
-            ..Default::default()
-        });
+            Transform::from_translation(scene_handle.sphere.center.into()),
+        ));
     }
 }
